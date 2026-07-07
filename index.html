@@ -323,10 +323,10 @@ function initScanUI(){
   const ean=document.getElementById("ean");
   if(ean) ean.addEventListener("input", buscaProduto);
 }
-let prodAtual=null;
+let prodAtual=null, catAtual=null;
 async function buscaProduto(){
   const e=document.getElementById("ean").value.trim(), box=document.getElementById("pinfo");
-  prodAtual=null;
+  prodAtual=null; catAtual=null;
   if(e.length<8){ box.innerHTML=""; return; }
   const {data} = await sb.from("produtos").select("*").eq("ean",e).maybeSingle();
   if(data){
@@ -334,8 +334,25 @@ async function buscaProduto(){
     const {data:pl} = await sb.from("produtos_loja").select("*").eq("ean",e).eq("loja",sess.loja).maybeSingle();
     const extra = pl? ` — preço ${brl(pl.preco_venda)} · estoque sistema: ${Number(pl.estoque)||0} un` : "";
     box.innerHTML=`<div class="alertbox a-blue" style="margin-top:10px;">✔ ${data.descricao}${extra}</div>`;
+    return;
+  }
+  // não acompanhado ainda: busca no catálogo da rede (tolera catálogo vazio/ausente)
+  let cat=null;
+  try{
+    let r = await sb.from("catalogo").select("*").eq("ean",e).maybeSingle();
+    cat = r.data;
+    if(!cat && /^0+/.test(e)){
+      r = await sb.from("catalogo").select("*").eq("ean",e.replace(/^0+/,"")).maybeSingle();
+      cat = r.data;
+    }
+  }catch(_){}
+  if(cat){
+    catAtual=cat;
+    box.innerHTML=`<div class="alertbox a-blue" style="margin-top:10px;">✔ ${cat.descricao} <br><span class="muted">Novo no acompanhamento — será adicionado ao salvar. Preço, custo e estoque chegam na próxima sincronização com o VR.</span></div>`;
   } else {
-    box.innerHTML=`<div class="alertbox a-red" style="margin-top:10px;">EAN não cadastrado no acompanhamento.${nivel(sess.papel)>=3?' Cadastre na aba ⚙️ Cadastro.':' Peça ao gestor para incluir.'}</div>`;
+    box.innerHTML=`<div class="alertbox a-red" style="margin-top:10px;">Produto não encontrado no catálogo da rede.
+      <label style="color:inherit;">Digite o nome para cadastrar mesmo assim:</label>
+      <input id="nomeNovo" placeholder="Nome / descrição do produto"></div>`;
   }
 }
 async function toggleScan(){
@@ -376,10 +393,24 @@ async function salvarContagem(){
   const ean=document.getElementById("ean").value.trim();
   const val=document.getElementById("val").value;
   const qtd=parseFloat(document.getElementById("qtd").value);
-  if(!prodAtual) return alert("Produto não cadastrado no acompanhamento.");
   if(!val || !(qtd>0)) return alert("Informe validade e quantidade.");
   loading(true);
   try{
+    // auto-cadastro se o produto ainda não é acompanhado
+    if(!prodAtual){
+      let novo=null;
+      if(catAtual){
+        novo = {ean, id_produto:catAtual.id_produto, descricao:catAtual.descricao};
+      } else {
+        const inp=document.getElementById("nomeNovo");
+        const nome = inp? inp.value.trim() : "";
+        if(!nome){ loading(false); return alert("Produto não encontrado no catálogo — digite o nome no campo vermelho para cadastrar."); }
+        novo = {ean, descricao:nome};
+      }
+      const {data:pr,error:ep} = await sb.from("produtos").upsert(novo,{onConflict:"ean"}).select().single();
+      if(ep) throw ep;
+      prodAtual = pr;
+    }
     const pl = ploja(ean, sess.loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",sess.loja).maybeSingle()).data;
     const preco = pl? Number(pl.preco_venda) : null;
     const {data:lote,error} = await sb.from("lotes").insert({
@@ -392,7 +423,7 @@ async function salvarContagem(){
     alert("Salvo! "+prodAtual.descricao+" — vence em "+(d<=0?"HOJE":d+" dias")+" ("+b.label+").");
     document.getElementById("ean").value=""; document.getElementById("val").value="";
     document.getElementById("qtd").value=""; document.getElementById("pinfo").innerHTML="";
-    prodAtual=null;
+    prodAtual=null; catAtual=null;
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
