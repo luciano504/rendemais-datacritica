@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0F2B4C">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Rende Mais · Data Crítica</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+  :root{
+    --navy:#0F2B4C; --navy2:#16395F; --bg:#F2F4F7; --card:#FFFFFF;
+    --ink:#1C2733; --mut:#5B6B7C; --line:#E1E6EC; --accent:#1565C0;
+    --ok:#2E7D32; --warn:#EF6C00; --danger:#C62828;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); font-size:16px; padding-bottom:76px;}
+  header{background:var(--navy); color:#fff; padding:14px 16px; position:sticky; top:0; z-index:20; display:flex; justify-content:space-between; align-items:center;}
+  header h1{font-size:17px; font-weight:600;}
+  header .sub{font-size:12px; opacity:.75; margin-top:2px;}
+  .pillrole{background:rgba(255,255,255,.14); border-radius:20px; padding:4px 12px; font-size:12px; white-space:nowrap;}
+  main{padding:14px; max-width:680px; margin:0 auto;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:12px;}
+  .card h2{font-size:15px; font-weight:600; margin-bottom:10px; color:var(--navy);}
+  label{display:block; font-size:13px; color:var(--mut); margin:10px 0 4px;}
+  input,select{width:100%; padding:12px; border:1px solid var(--line); border-radius:10px; font-size:16px; background:#fff; color:var(--ink);}
+  input:focus,select:focus{outline:2px solid var(--accent); border-color:transparent;}
+  button{width:100%; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:600; cursor:pointer; margin-top:12px;}
+  .btn-p{background:var(--navy); color:#fff;}
+  .btn-s{background:#E8EEF5; color:var(--navy);}
+  .btn-ok{background:var(--ok); color:#fff;}
+  .btn-danger{background:var(--danger); color:#fff;}
+  .btn-sm{width:auto; padding:8px 14px; font-size:13px; margin-top:8px; margin-right:6px;}
+  .row{display:flex; gap:10px;} .row>*{flex:1;}
+  nav{position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--line); display:flex; z-index:30;}
+  nav button{margin:0; border-radius:0; background:none; color:var(--mut); font-size:12px; font-weight:500; padding:10px 4px 12px; display:flex; flex-direction:column; align-items:center; gap:3px;}
+  nav button.on{color:var(--navy); font-weight:700;}
+  nav button .ic{font-size:20px; line-height:1;}
+  .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; color:#fff;}
+  .item{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--line);}
+  .item:last-child{border-bottom:none;}
+  .item .t{font-weight:600; font-size:15px;}
+  .item .s{font-size:12.5px; color:var(--mut); margin-top:2px;}
+  .num{font-size:22px; font-weight:700;}
+  .kpis{display:flex; gap:10px; margin-bottom:12px;}
+  .kpi{flex:1; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; text-align:center;}
+  .kpi .v{font-size:19px; font-weight:800; color:var(--navy);}
+  .kpi .l{font-size:11px; color:var(--mut); margin-top:3px; line-height:1.3;}
+  .kpi.red .v{color:var(--danger);}
+  .alertbox{border-radius:12px; padding:12px 14px; font-size:14px; margin-bottom:12px; font-weight:500;}
+  .a-red{background:#FDE8E8; color:#8E1B1B; border:1px solid #F5C1C1;}
+  .a-green{background:#E7F4E8; color:#1E5B22; border:1px solid #BFE3C2;}
+  .a-blue{background:#E7F0FB; color:#123E6B; border:1px solid #C3D9F2;}
+  .daybar{height:6px; border-radius:3px; margin-top:6px;}
+  .muted{color:var(--mut); font-size:13px;}
+  .center{text-align:center;}
+  .hidden{display:none;}
+  .price-big{font-size:26px; font-weight:800; color:var(--navy);}
+  .strike{text-decoration:line-through; color:var(--mut); font-weight:500; font-size:16px;}
+  pre{white-space:pre-wrap; font-family:ui-monospace,Menlo,monospace; font-size:12px; background:#F7F9FB; border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:10px;}
+  #scanbox{width:100%; border-radius:12px; background:#000; display:none; margin-top:10px; max-height:280px; object-fit:cover;}
+  .grp-date{font-size:13px; font-weight:700; color:var(--navy); margin:16px 0 4px; display:flex; align-items:center; gap:8px;}
+  .back{background:none; border:none; color:#fff; font-size:22px; width:auto; padding:0 10px 0 0; margin:0; cursor:pointer;}
+  h3.sec{font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--mut); margin:18px 0 8px;}
+  .ress{background:var(--navy); color:#fff; border-radius:14px; padding:14px 16px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;}
+  .ress .v{font-size:22px; font-weight:800;}
+  .ress .l{font-size:12px; opacity:.8;}
+  #loader{position:fixed; inset:0; background:rgba(255,255,255,.7); display:none; align-items:center; justify-content:center; z-index:50; font-weight:700; color:var(--navy);}
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex; align-items:center;">
+    <button class="back hidden" id="btnBack" onclick="goBack()">‹</button>
+    <div>
+      <h1 id="hTitle">Rende Mais · Data Crítica</h1>
+      <div class="sub" id="hSub">Controle de mercadorias próximas do vencimento</div>
+    </div>
+  </div>
+  <div class="pillrole hidden" id="hRole"></div>
+</header>
+<main id="view"><div class="card center muted">Carregando…</div></main>
+<nav id="nav" class="hidden"></nav>
+<div id="loader">Salvando…</div>
+
+<script>
+/* ================= CONFIG ================= */
+const SUPABASE_URL = "https://estciwkeihmokvlnvaum.supabase.co";
+const SUPABASE_KEY = "sb_publishable_l14fjxQmWUeu5OXlZJ35GA_-X3ESkgZ";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const LOJAS = {L01:"L01 Veneza",L02:"L02 Máximo",L03:"L03 Royal",L05:"L05 Alvorada",L08:"L08 Tradição",L09:"L09 Massangana"};
+const PAPEIS = {operador:"Operador",prevencao:"Prevenção de perdas",gestor:"Gestor"};
+const JANELA_SEG = 5, DEGRAU = 0.15, UPLIFT = 0.30, MAX_DEGRAUS = 3, DIAS_VMD = 14;
+
+let sess = null;
+let route = {page:"login", param:null, prev:[]};
+let cache = {usuarios:[], lotes:[], produtos:{}, plojas:{}, hist:{}, vendas:{}};
+
+/* ================= UTIL ================= */
+function hoje(){ return new Date().toISOString().slice(0,10); }
+function diasAte(v){ const a=new Date(hoje()+"T12:00"), b=new Date(v+"T12:00"); return Math.round((b-a)/86400000); }
+function brl(n){ return (Number(n)||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
+function fmtData(v){ const [y,m,d]=String(v).slice(0,10).split("-"); return d+"/"+m+"/"+y; }
+async function sha256(t){
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+function loading(on){ document.getElementById("loader").style.display = on?"flex":"none"; }
+function erroDB(e){ console.error(e); alert("Falha de comunicação com o banco: "+(e.message||e)+"\nVerifique a internet e tente de novo."); }
+
+const BUCKETS = [
+  {max:0,label:"Vence hoje",cor:"#7F0000"},{max:1,label:"1 dia",cor:"#B71C1C"},
+  {max:3,label:"3 dias",cor:"#D32F2F"},{max:5,label:"5 dias",cor:"#E64A19"},
+  {max:10,label:"10 dias",cor:"#EF6C00"},{max:15,label:"15 dias",cor:"#F57F17"},
+  {max:20,label:"20 dias",cor:"#F9A825"},{max:30,label:"30 dias",cor:"#9E9D24"},
+  {max:45,label:"45 dias",cor:"#558B2F"},{max:60,label:"60 dias",cor:"#2E7D32"}
+];
+function bucket(d){ if(d>60) return {label:"+60 dias",cor:"#78909C"}; for(const b of BUCKETS) if(d<=b.max) return b; return BUCKETS[BUCKETS.length-1]; }
+
+/* ================= DADOS ================= */
+async function carregarUsuarios(){
+  const {data,error} = await sb.from("usuarios").select("id,nome,papel,loja").eq("ativo",true).order("nome");
+  if(error) throw error;
+  cache.usuarios = data;
+}
+async function carregarLotes(){
+  let q = sb.from("lotes").select("*, produtos(descricao)").eq("resolvido",false).order("validade");
+  if(nivel(sess.papel)<3) q = q.eq("loja", sess.loja);
+  const {data,error} = await q;
+  if(error) throw error;
+  cache.lotes = data;
+  // dados por loja dos produtos envolvidos
+  const eans = [...new Set(data.map(l=>l.ean))];
+  cache.plojas = {};
+  if(eans.length){
+    const {data:pl,error:e2} = await sb.from("produtos_loja").select("*").in("ean",eans);
+    if(e2) throw e2;
+    pl.forEach(p=>{ cache.plojas[p.ean+"|"+p.loja]=p; });
+    const corte = new Date(Date.now()-DIAS_VMD*86400000).toISOString().slice(0,10);
+    const {data:vd,error:e3} = await sb.from("vendas_dia").select("ean,loja,qtd").in("ean",eans).gte("data",corte);
+    if(e3) throw e3;
+    cache.vendas = {};
+    vd.forEach(v=>{ const k=v.ean+"|"+v.loja; cache.vendas[k]=(cache.vendas[k]||0)+Number(v.qtd); });
+  }
+}
+async function carregarHist(loteId){
+  const {data,error} = await sb.from("precos_hist").select("*").eq("lote_id",loteId).order("criado_em");
+  if(error) throw error;
+  cache.hist[loteId] = data;
+  return data;
+}
+function ploja(ean,loja){ return cache.plojas[ean+"|"+loja] || null; }
+function vendaDiaria(lote){
+  const v14 = cache.vendas[lote.ean+"|"+lote.loja];
+  if(v14!==undefined) return Math.max(v14/DIAS_VMD, 0.1);
+  const pl = ploja(lote.ean, lote.loja);
+  if(pl && pl.vmd14>0) return Number(pl.vmd14);
+  return 0.5;
+}
+function precoNormal(lote){
+  const h = cache.hist[lote.id];
+  if(h && h.length) return Number(h[0].preco);
+  const pl = ploja(lote.ean, lote.loja);
+  return pl && pl.preco_venda ? Number(pl.preco_venda) : Number(lote.preco_atual)||0;
+}
+function sugestaoPreco(lote){
+  const dias = diasAte(lote.validade), janela = Math.max(dias-JANELA_SEG,0);
+  const vd = vendaDiaria(lote), rest = Number(lote.qtd_restante);
+  const custo = (ploja(lote.ean,lote.loja)||{}).ultimo_custo || 0;
+  if(rest <= vd*janela) return {ok:true, vd, janela, msg:"Projeção indica que o lote zera a tempo. Manter preço atual."};
+  let preco = Number(lote.preco_atual)||precoNormal(lote), vdE = vd, n = 0;
+  while(n < MAX_DEGRAUS){ n++; preco*=(1-DEGRAU); vdE*=(1+UPLIFT); if(vdE*janela>=rest) break; }
+  return {ok:false, vd, vdE, janela, degraus:n, preco:Math.max(preco, Number(custo)||0),
+    msg:"No ritmo atual ("+vd.toFixed(1)+"/dia) não zera a tempo. Sugerido "+n+"× desconto de 15%."};
+}
+function ressarcLote(lote){
+  const h = cache.hist[lote.id]; if(!h||!h.length) return 0;
+  const pn = Number(h[0].preco);
+  return h.reduce((a,r)=> a + Math.max(0, pn-Number(r.preco))*Number(r.vendido), 0);
+}
+function custoRisco(lote){
+  const pl = ploja(lote.ean,lote.loja);
+  return Number(lote.qtd_restante) * (pl? Number(pl.ultimo_custo)||0 : 0);
+}
+function sugestaoTransf(lote){
+  const out=[];
+  for(const lj of Object.keys(LOJAS)){
+    if(lj===lote.loja) continue;
+    const pl = ploja(lote.ean, lj);
+    if(!pl) continue;
+    const vmd = Number(pl.vmd14)||0.1;
+    const cob = Number(pl.estoque)/Math.max(vmd,0.1);
+    if(cob<20) out.push({loja:lj, cobertura:Math.round(cob)});
+  }
+  return out.sort((a,b)=>a.cobertura-b.cobertura).slice(0,3);
+}
+
+/* ================= NAVEGAÇÃO ================= */
+function nivel(p){ return {operador:1,prevencao:2,gestor:3}[p]; }
+function home(){ return sess.papel==="gestor"?"gestor":(sess.papel==="prevencao"?"calendario":"contagem"); }
+function go(page,param){ route.prev.push({page:route.page,param:route.param}); route.page=page; route.param=param; render(); }
+function goBack(){ const p=route.prev.pop()||{page:home(),param:null}; route.page=p.page; route.param=p.param; render(); }
+function logout(){ sess=null; stopScan(); localStorage.removeItem("dc_sess"); route={page:"login",param:null,prev:[]}; render(); }
+
+function renderNav(){
+  const n=document.getElementById("nav");
+  if(!sess){ n.classList.add("hidden"); return; }
+  n.classList.remove("hidden");
+  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["gestor","📊","Gestão",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
+  n.innerHTML = tabs.filter(t=>nivel(sess.papel)>=t[3])
+    .map(t=>`<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span class="ic">${t[1]}</span>${t[2]}</button>`).join("");
+}
+
+async function render(){
+  const v=document.getElementById("view");
+  document.getElementById("btnBack").classList.toggle("hidden", route.prev.length===0 || route.page==="login");
+  document.getElementById("hRole").classList.toggle("hidden", !sess);
+  if(sess){ document.getElementById("hRole").textContent = PAPEIS[sess.papel];
+    document.getElementById("hSub").textContent = sess.nome+" · "+LOJAS[sess.loja]; }
+  else document.getElementById("hSub").textContent = "Controle de mercadorias próximas do vencimento";
+  renderNav();
+  try{
+    if(route.page==="login"){ await carregarUsuarios(); v.innerHTML = vLogin(); }
+    else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
+    else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
+    else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); v.innerHTML = vGestor(); }
+    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
+    else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
+    else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
+  }catch(e){ v.innerHTML = `<div class="alertbox a-red">⚠️ ${e.message||e}<br><button class="btn-s btn-sm" onclick="render()">Tentar de novo</button></div>`; }
+}
+async function histTodos(){
+  const ids = cache.lotes.map(l=>l.id);
+  cache.hist = {};
+  if(!ids.length) return;
+  const {data,error} = await sb.from("precos_hist").select("*").in("lote_id",ids).order("criado_em");
+  if(error) throw error;
+  data.forEach(h=>{ (cache.hist[h.lote_id]=cache.hist[h.lote_id]||[]).push(h); });
+}
+
+/* ================= LOGIN ================= */
+function vLogin(){
+  const ops = cache.usuarios.map(u=>`<option value="${u.id}">${u.nome} — ${PAPEIS[u.papel]} (${u.loja})</option>`).join("");
+  return `
+  <div class="card">
+    <h2>Entrar</h2>
+    <label>Usuário</label><select id="luser">${ops||'<option value="">Nenhum usuário cadastrado</option>'}</select>
+    <label>PIN</label><input id="lpin" type="password" inputmode="numeric" placeholder="••••">
+    <button class="btn-p" onclick="doLogin()">Entrar</button>
+  </div>
+  <div class="card">
+    <h2>Novo usuário</h2>
+    <p class="muted">Cadastro simples, apenas para registrar a responsabilidade das ações.</p>
+    <label>Nome</label><input id="cnome" placeholder="Nome completo">
+    <div class="row">
+      <div><label>Função</label><select id="cpapel">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
+      <div><label>Loja</label><select id="cloja">${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
+    </div>
+    <label>PIN (4 dígitos)</label><input id="cpin" inputmode="numeric" maxlength="4" placeholder="0000">
+    <button class="btn-s" onclick="doCadUser()">Cadastrar</button>
+  </div>`;
+}
+async function doLogin(){
+  const id = document.getElementById("luser").value;
+  const pin = document.getElementById("lpin").value;
+  if(!id || !pin) return alert("Selecione o usuário e digite o PIN.");
+  loading(true);
+  try{
+    const {data,error} = await sb.from("usuarios").select("*").eq("id",id).single();
+    if(error) throw error;
+    if(data.pin_hash !== await sha256(pin)) { loading(false); return alert("PIN incorreto."); }
+    sess = data;
+    localStorage.setItem("dc_sess", JSON.stringify({id:data.id}));
+    route = {page:home(), param:null, prev:[]};
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+async function doCadUser(){
+  const nome=document.getElementById("cnome").value.trim(), pin=document.getElementById("cpin").value.trim();
+  if(!nome || pin.length!==4) return alert("Preencha nome e PIN de 4 dígitos.");
+  loading(true);
+  try{
+    const {error} = await sb.from("usuarios").insert({nome, pin_hash:await sha256(pin),
+      papel:document.getElementById("cpapel").value, loja:document.getElementById("cloja").value});
+    if(error) throw error;
+    alert("Usuário cadastrado! Faça login.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
+/* ================= CONTAGEM (OPERADOR) ================= */
+let scanStream=null, scanTimer=null, zxReader=null;
+function vContagem(){
+  const meus = cache.lotes.filter(l=>l.loja===sess.loja && String(l.criado_em).slice(0,10)===hoje()).slice(0,8);
+  return `
+  <div class="card">
+    <h2>Registrar produto com data crítica</h2>
+    <label>Código EAN</label>
+    <div class="row">
+      <input id="ean" inputmode="numeric" placeholder="Digite ou escaneie o código">
+      <button class="btn-s btn-sm" style="flex:0 0 auto;" onclick="toggleScan()" id="btnCam">📷 Câmera</button>
+    </div>
+    <video id="scanbox" playsinline muted></video>
+    <div id="pinfo"></div>
+    <label>Data de validade (na embalagem)</label><input id="val" type="date" min="${hoje()}">
+    <label>Quantidade contada fisicamente</label><input id="qtd" inputmode="numeric" placeholder="0">
+    <p class="muted" style="margin-top:8px;">A contagem física prevalece sobre o estoque do sistema.</p>
+    <button class="btn-p" onclick="salvarContagem()">Salvar contagem</button>
+  </div>
+  <div class="card">
+    <h2>Contagens de hoje — ${LOJAS[sess.loja]}</h2>
+    ${meus.length? meus.map(l=>{
+      const d=diasAte(l.validade), b=bucket(d);
+      return `<div class="item"><div><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div><div class="s">${Number(l.qtd_inicial)} un · vence ${fmtData(l.validade)} · por ${l.criado_por_nome||""}</div></div>
+      <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span></div>`;
+    }).join(""):'<p class="muted">Nenhuma contagem hoje.</p>'}
+  </div>`;
+}
+function initScanUI(){
+  const ean=document.getElementById("ean");
+  if(ean) ean.addEventListener("input", buscaProduto);
+}
+let prodAtual=null;
+async function buscaProduto(){
+  const e=document.getElementById("ean").value.trim(), box=document.getElementById("pinfo");
+  prodAtual=null;
+  if(e.length<8){ box.innerHTML=""; return; }
+  const {data} = await sb.from("produtos").select("*").eq("ean",e).maybeSingle();
+  if(data){
+    prodAtual=data;
+    const {data:pl} = await sb.from("produtos_loja").select("*").eq("ean",e).eq("loja",sess.loja).maybeSingle();
+    const extra = pl? ` — preço ${brl(pl.preco_venda)} · estoque sistema: ${Number(pl.estoque)||0} un` : "";
+    box.innerHTML=`<div class="alertbox a-blue" style="margin-top:10px;">✔ ${data.descricao}${extra}</div>`;
+  } else {
+    box.innerHTML=`<div class="alertbox a-red" style="margin-top:10px;">EAN não cadastrado no acompanhamento.${nivel(sess.papel)>=3?' Cadastre na aba ⚙️ Cadastro.':' Peça ao gestor para incluir.'}</div>`;
+  }
+}
+async function toggleScan(){
+  const v=document.getElementById("scanbox");
+  if(scanStream||zxReader){ stopScan(); return; }
+  try{
+    if("BarcodeDetector" in window){
+      scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      v.srcObject=scanStream; v.style.display="block"; await v.play();
+      const det = new BarcodeDetector({formats:["ean_13","ean_8","code_128"]});
+      scanTimer = setInterval(async ()=>{
+        try{ const codes=await det.detect(v);
+          if(codes.length){ document.getElementById("ean").value=codes[0].rawValue; buscaProduto(); stopScan(); navigator.vibrate&&navigator.vibrate(80); }
+        }catch(e){}
+      }, 350);
+    } else {
+      // fallback iPhone/Safari: ZXing
+      zxReader = new ZXing.BrowserMultiFormatReader();
+      v.style.display="block";
+      await zxReader.decodeFromVideoDevice(null, v, (res, err)=>{
+        if(res){ document.getElementById("ean").value=res.getText(); buscaProduto(); stopScan(); navigator.vibrate&&navigator.vibrate(80); }
+      });
+    }
+    document.getElementById("btnCam").textContent="✖ Fechar";
+  }catch(err){
+    stopScan();
+    alert("Não consegui abrir a câmera ("+(err.message||err)+"). Verifique a permissão de câmera do navegador ou digite o EAN.");
+  }
+}
+function stopScan(){
+  clearInterval(scanTimer); scanTimer=null;
+  if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
+  if(zxReader){ try{zxReader.reset();}catch(e){} zxReader=null; }
+  const v=document.getElementById("scanbox"); if(v){ v.style.display="none"; v.srcObject=null; }
+  const b=document.getElementById("btnCam"); if(b) b.textContent="📷 Câmera";
+}
+async function salvarContagem(){
+  const ean=document.getElementById("ean").value.trim();
+  const val=document.getElementById("val").value;
+  const qtd=parseFloat(document.getElementById("qtd").value);
+  if(!prodAtual) return alert("Produto não cadastrado no acompanhamento.");
+  if(!val || !(qtd>0)) return alert("Informe validade e quantidade.");
+  loading(true);
+  try{
+    const pl = ploja(ean, sess.loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",sess.loja).maybeSingle()).data;
+    const preco = pl? Number(pl.preco_venda) : null;
+    const {data:lote,error} = await sb.from("lotes").insert({
+      ean, loja:sess.loja, validade:val, qtd_inicial:qtd, qtd_restante:qtd,
+      preco_atual:preco, criado_por:sess.id, criado_por_nome:sess.nome
+    }).select().single();
+    if(error) throw error;
+    if(preco) await sb.from("precos_hist").insert({lote_id:lote.id, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
+    const d=diasAte(val), b=bucket(d);
+    alert("Salvo! "+prodAtual.descricao+" — vence em "+(d<=0?"HOJE":d+" dias")+" ("+b.label+").");
+    document.getElementById("ean").value=""; document.getElementById("val").value="";
+    document.getElementById("qtd").value=""; document.getElementById("pinfo").innerHTML="";
+    prodAtual=null;
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
+/* ================= CALENDÁRIO (PREVENÇÃO) ================= */
+function vCalendario(){
+  const zerados = cache.lotes.filter(l=>l.zerado && !l.resolvido);
+  const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)<=60);
+  const grupos={};
+  ativos.forEach(l=>{ (grupos[l.validade]=grupos[l.validade]||[]).push(l); });
+  let html = zerados.map(l=>{
+    const pn = precoNormal(l);
+    return `<div class="alertbox a-green">✅ <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) zerou a contagem crítica.
+      ${pn?`Voltar ao preço normal de <b>${brl(pn)}</b>.`:""}
+      <button class="btn-ok btn-sm" onclick="resolver('${l.id}')">Preço normalizado</button></div>`;
+  }).join("");
+  if(!Object.keys(grupos).length && !zerados.length) html+='<div class="card"><p class="muted">Nenhum item com data crítica nos próximos 60 dias.</p></div>';
+  for(const [data,ls] of Object.entries(grupos)){
+    const d=diasAte(data), b=bucket(d);
+    html += `<div class="grp-date"><span class="badge" style="background:${b.cor}">${d<=0?"VENCE HOJE":"faltam "+d+" dias"}</span> ${fmtData(data)}</div>
+    <div class="card" style="padding:6px 16px;">`+
+    ls.map(l=>{
+      const pn=precoNormal(l);
+      const promo = l.preco_atual && pn && Number(l.preco_atual)<pn;
+      return `<div class="item" onclick="${nivel(sess.papel)>=3?`go('itemdet','${l.id}')`:''}" style="${nivel(sess.papel)>=3?'cursor:pointer;':''}">
+        <div style="flex:1;"><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div>
+          <div class="s">${LOJAS[l.loja]} · falta zerar <b>${Number(l.qtd_restante)}</b> de ${Number(l.qtd_inicial)} un ${promo?'· promo '+brl(l.preco_atual):''}</div>
+          <div class="daybar" style="background:${b.cor}; width:${Math.min(100,Math.round(l.qtd_restante/l.qtd_inicial*100))}%;"></div></div>
+        <div class="num" style="color:${b.cor}">${Number(l.qtd_restante)}</div>
+      </div>`;
+    }).join("")+`</div>`;
+  }
+  return `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
+}
+async function resolver(id){
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({resolvido:true}).eq("id",id);
+    if(error) throw error;
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
+/* ================= GESTOR ================= */
+function vGestor(){
+  const ls = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado)
+    .sort((a,b)=>{ const da=diasAte(a.validade), db=diasAte(b.validade);
+      return da!==db ? da-db : Number(b.qtd_restante)-Number(a.qtd_restante); });
+  const ativos = ls.filter(l=>!l.zerado);
+  const risco = ativos.reduce((a,l)=>a+custoRisco(l),0);
+  const ress = ls.reduce((a,l)=>a+ressarcLote(l),0);
+  const urg = ativos.filter(l=>diasAte(l.validade)<=10);
+  return `
+  <div class="ress"><div><div class="l">Ressarcimento a demandar dos fornecedores</div><div class="v">${brl(ress)}</div></div><div style="font-size:26px;">🧾</div></div>
+  <div class="kpis">
+    <div class="kpi red"><div class="v">${brl(risco)}</div><div class="l">Custo em risco</div></div>
+    <div class="kpi"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
+    <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
+  </div>
+  ${urg.length?`<div class="alertbox a-red">⚠️ <b>${urg.length} item(ns) a 10 dias ou menos do vencimento.</b> Priorize preço/transferência.</div>`:""}
+  <button class="btn-p" onclick="go('relatorio')">📄 Relatório para equipe de apoio</button>
+  <h3 class="sec">Prioridade: data mais próxima · maior quantidade</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${ativos.map(l=>{
+    const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
+    return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
+      <div style="flex:1;"><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div>
+      <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}</div></div>
+      <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
+    </div>`;
+  }).join("") || '<p class="muted">Nada em acompanhamento.</p>'}
+  </div>`;
+}
+
+function vItem(id){
+  const l=cache.lotes.find(x=>x.id===id);
+  if(!l) return "<p>Item não encontrado.</p>";
+  const pl = ploja(l.ean,l.loja), d=diasAte(l.validade), b=bucket(d), sug=sugestaoPreco(l);
+  const transf=sugestaoTransf(l), pn=precoNormal(l);
+  const h = cache.hist[l.id]||[];
+  const vendidoTotal = h.reduce((a,x)=>a+Number(x.vendido),0);
+  return `
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:start;">
+      <div><h2 style="margin-bottom:2px;">${l.produtos?l.produtos.descricao:l.ean}</h2>
+      <p class="muted">EAN ${l.ean} · ${LOJAS[l.loja]} · contado por ${l.criado_por_nome||"?"} em ${fmtData(l.criado_em)}</p></div>
+      <span class="badge" style="background:${b.cor}; font-size:14px;">${d<=0?"VENCE HOJE":d+" dias"}</span>
+    </div>
+    ${d<=10?'<div class="alertbox a-red" style="margin-top:10px;">🚨 Alerta forte: 10 dias ou menos para o vencimento.</div>':''}
+    <div class="kpis" style="margin-top:12px;">
+      <div class="kpi"><div class="v">${Number(l.qtd_restante)}</div><div class="l">Falta zerar (de ${Number(l.qtd_inicial)})</div></div>
+      <div class="kpi"><div class="v">${vendidoTotal}</div><div class="l">Vendido desde a contagem</div></div>
+      <div class="kpi red"><div class="v">${brl(custoRisco(l))}</div><div class="l">Custo em risco</div></div>
+    </div>
+    ${pl?`<p class="muted">Último custo: <b>${brl(pl.ultimo_custo)}</b> · Última entrada: <b>${pl.data_ultima_entrada?fmtData(pl.data_ultima_entrada):"—"}</b> (${Number(pl.qtd_ultima_entrada)||0} un) · Estoque sistema: <b>${Number(pl.estoque)||0}</b> · Venda diária: <b>${sug.vd.toFixed(1)}/dia</b></p>`:
+    `<p class="muted">Dados do VR ainda não sincronizados para este produto. Venda diária estimada: ${sug.vd.toFixed(1)}/dia.</p>`}
+  </div>
+
+  <div class="card">
+    <h2>Preço</h2>
+    <div style="display:flex; align-items:baseline; gap:10px;">
+      ${l.preco_atual && pn && Number(l.preco_atual)<pn?`<span class="strike">${brl(pn)}</span>`:""}
+      <span class="price-big">${l.preco_atual?brl(l.preco_atual):"—"}</span>
+      <span class="muted">preço em vigor</span>
+    </div>
+    <div class="alertbox ${sug.ok?'a-green':'a-blue'}" style="margin-top:12px;">${sug.msg}
+      ${!sug.ok?`<br>Sugestão: <b>${brl(sug.preco)}</b> (venda esperada ≈ ${sug.vdE.toFixed(1)}/dia, janela de ${sug.janela} dias). Reavaliar em 5 dias.`:""}
+    </div>
+    ${!sug.ok?`
+    <label>Aceitar sugestão ou definir outro preço</label>
+    <div class="row">
+      <input id="novoPreco" type="number" step="0.01" value="${sug.preco.toFixed(2)}">
+      <button class="btn-p btn-sm" style="flex:0 0 auto; margin-top:0; padding:12px 18px;" onclick="aplicarPreco('${l.id}')">Aplicar</button>
+    </div>
+    <p class="muted" style="margin-top:6px;">Ao aplicar, o item entra no relatório da equipe de apoio.</p>`:""}
+    ${l.preco_atual && pn && Number(l.preco_atual)<pn?`<button class="btn-s" onclick="voltarNormal('${l.id}')">Voltar ao preço normal (${brl(pn)})</button>`:""}
+  </div>
+
+  <div class="card">
+    <h2>Ressarcimento do fornecedor — este lote</h2>
+    <div class="price-big" style="color:var(--danger);">${brl(ressarcLote(l))}</div>
+    <p class="muted">Σ (preço normal − preço aceito) × unidades vendidas em cada preço.</p>
+    ${h.filter(x=>Number(x.preco)<pn).map(x=>`<div class="item"><div class="s">Desde ${fmtData(x.desde)} a ${brl(x.preco)} — ${Number(x.vendido)} un vendidas · por ${x.aplicado_por_nome||"?"}</div><div><b>${brl((pn-Number(x.preco))*Number(x.vendido))}</b></div></div>`).join("")}
+  </div>
+
+  <div class="card">
+    <h2>Transferência sugerida</h2>
+    ${transf.length? transf.map(t=>`<div class="item"><div><div class="t">${LOJAS[t.loja]}</div><div class="s">cobertura de estoque: ${t.cobertura} dias de venda (&lt; 20)</div></div><span class="badge" style="background:var(--accent);">enviar</span></div>`).join("")
+    : '<p class="muted">Nenhuma loja com cobertura abaixo de 20 dias (ou dados do VR ainda não sincronizados).</p>'}
+  </div>
+
+  <div class="card">
+    <h2>Ajustes</h2>
+    <label>Registrar venda / baixa manual (unidades)</label>
+    <div class="row">
+      <input id="vqtd" inputmode="numeric" placeholder="0">
+      <button class="btn-s btn-sm" style="flex:0 0 auto; margin-top:0; padding:12px 18px;" onclick="registrarVenda('${l.id}')">Lançar</button>
+    </div>
+    <p class="muted" style="margin-top:6px;">Quando a sincronização diária com o VR estiver ativa, as vendas baixam sozinhas.</p>
+  </div>`;
+}
+async function aplicarPreco(id){
+  const l=cache.lotes.find(x=>x.id===id);
+  const np=parseFloat(document.getElementById("novoPreco").value);
+  if(!(np>0)) return alert("Preço inválido.");
+  const custo = (ploja(l.ean,l.loja)||{}).ultimo_custo;
+  if(custo && np<Number(custo) && !confirm("Preço abaixo do custo ("+brl(custo)+"). Confirmar mesmo assim?")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({preco_atual:np, pend_apoio:true}).eq("id",id);
+    if(error) throw error;
+    await sb.from("precos_hist").insert({lote_id:id, preco:np, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
+    alert("Preço aplicado. Item adicionado ao relatório da equipe de apoio.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+async function voltarNormal(id){
+  const l=cache.lotes.find(x=>x.id===id), pn=precoNormal(l);
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({preco_atual:pn, pend_apoio:true}).eq("id",id);
+    if(error) throw error;
+    await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+async function registrarVenda(id){
+  const l=cache.lotes.find(x=>x.id===id);
+  const q=parseFloat(document.getElementById("vqtd").value);
+  if(!(q>0)) return alert("Quantidade inválida.");
+  const real=Math.min(q, Number(l.qtd_restante));
+  loading(true);
+  try{
+    const novo = Number(l.qtd_restante)-real;
+    const {error} = await sb.from("lotes").update({qtd_restante:novo, zerado:novo<=0}).eq("id",id);
+    if(error) throw error;
+    const h = cache.hist[l.id]||await carregarHist(l.id);
+    if(h.length){
+      const ult=h[h.length-1];
+      await sb.from("precos_hist").update({vendido:Number(ult.vendido)+real}).eq("id",ult.id);
+    }
+    if(novo<=0) alert("🎉 Lote zerado! Alerta enviado à prevenção de perdas para normalizar o preço.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
+/* ================= RELATÓRIO ================= */
+function vRelatorio(){
+  const itens=cache.lotes.filter(l=>l.pend_apoio && !l.resolvido);
+  const linhas=itens.map(l=>{
+    const pn=precoNormal(l);
+    return `${LOJAS[l.loja]} | ${l.ean} | ${l.produtos?l.produtos.descricao:""} | de ${brl(pn)} por ${brl(l.preco_atual)} | validade ${fmtData(l.validade)} | ${Number(l.qtd_restante)} un`;
+  });
+  const ress = cache.lotes.reduce((a,l)=>a+ressarcLote(l),0);
+  const txt = `RENDE MAIS — MUDANÇA DE PREÇOS (DATA CRÍTICA)\nGerado em ${fmtData(hoje())} por ${sess.nome}\n\n`+
+    (linhas.length? linhas.join("\n") : "Nenhuma alteração de preço pendente.")+
+    `\n\nRessarcimento acumulado a demandar dos fornecedores: ${brl(ress)}`;
+  return `<div class="card">
+    <h2>Relatório para a equipe de apoio</h2>
+    <p class="muted">${itens.length} alteração(ões) de preço pendente(s) de troca de etiqueta.</p>
+    <pre id="reltxt">${txt}</pre>
+    <button class="btn-p" onclick="copiarRel()">Copiar relatório</button>
+    ${itens.length?`<button class="btn-s" onclick="marcarEnviado()">Marcar como enviado</button>`:""}
+  </div>`;
+}
+function copiarRel(){
+  const t=document.getElementById("reltxt").innerText;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(()=>alert("Copiado! Cole no WhatsApp/e-mail da equipe."),()=>alert("Selecione e copie manualmente."));
+  } else alert("Selecione o texto e copie manualmente.");
+}
+async function marcarEnviado(){
+  loading(true);
+  try{
+    const ids = cache.lotes.filter(l=>l.pend_apoio).map(l=>l.id);
+    const {error} = await sb.from("lotes").update({pend_apoio:false}).in("id",ids);
+    if(error) throw error;
+    alert("Relatório marcado como enviado.");
+  }catch(e){ erroDB(e); }
+  loading(false); goBack();
+}
+
+/* ================= CADASTRO ================= */
+async function vCadastro(){
+  const {data:prods} = await sb.from("produtos").select("*").order("descricao").limit(200);
+  return `<div class="card">
+    <h2>Adicionar produto ao acompanhamento</h2>
+    <label>EAN</label><input id="pean" inputmode="numeric">
+    <label>Nome / descrição</label><input id="pnome">
+    <button class="btn-p" onclick="addProduto()">Adicionar produto</button>
+    <p class="muted" style="margin-top:8px;">Preço, custo, estoque e vendas chegam pela sincronização diária com o VR.</p>
+  </div>
+  <div class="card">
+    <h2>Produtos acompanhados (${(prods||[]).length})</h2>
+    ${(prods||[]).map(p=>`<div class="item"><div><div class="t">${p.descricao}</div><div class="s">${p.ean}</div></div></div>`).join("")||'<p class="muted">Nenhum ainda.</p>'}
+  </div>
+  <div class="card">
+    <h2>Usuários (${cache.usuarios.length})</h2>
+    ${cache.usuarios.map(u=>`<div class="item"><div><div class="t">${u.nome}</div><div class="s">${PAPEIS[u.papel]} · ${LOJAS[u.loja]}</div></div></div>`).join("")}
+  </div>`;
+}
+async function addProduto(){
+  const ean=document.getElementById("pean").value.trim(), nome=document.getElementById("pnome").value.trim();
+  if(!ean || !nome) return alert("Preencha EAN e nome.");
+  loading(true);
+  try{
+    const {error} = await sb.from("produtos").insert({ean, descricao:nome});
+    if(error) throw error;
+    alert("Produto adicionado ao acompanhamento.");
+  }catch(e){
+    if(String(e.message).includes("duplicate")) alert("Esse EAN já está cadastrado.");
+    else erroDB(e);
+  }
+  loading(false); render();
+}
+
+/* ================= INIT ================= */
+window.onerror = function(msg,src,line){
+  try{ document.getElementById("view").insertAdjacentHTML("afterbegin",
+    '<div class="alertbox a-red">⚠️ Erro: '+msg+' (linha '+line+')</div>'); }catch(e){}
+  return false;
+};
+(async ()=>{
+  try{
+    const salvo = localStorage.getItem("dc_sess");
+    if(salvo){
+      const {id} = JSON.parse(salvo);
+      const {data} = await sb.from("usuarios").select("*").eq("id",id).eq("ativo",true).maybeSingle();
+      if(data){ sess=data; route={page:home(),param:null,prev:[]}; }
+    }
+  }catch(e){}
+  render();
+  if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+})();
+</script>
+</body>
+</html>
