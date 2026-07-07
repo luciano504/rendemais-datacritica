@@ -1,0 +1,11 @@
+{
+  "name": "Rende Mais · Data Crítica",
+  "short_name": "Data Crítica",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F2F4F7",
+  "theme_color": "#0F2B4C",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
