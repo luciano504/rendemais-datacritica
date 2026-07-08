@@ -350,9 +350,7 @@ async function buscaProduto(){
     catAtual=cat;
     box.innerHTML=`<div class="alertbox a-blue" style="margin-top:10px;">✔ ${cat.descricao} <br><span class="muted">Novo no acompanhamento — será adicionado ao salvar. Preço, custo e estoque chegam na próxima sincronização com o VR.</span></div>`;
   } else {
-    box.innerHTML=`<div class="alertbox a-red" style="margin-top:10px;">Produto não encontrado no catálogo da rede.
-      <label style="color:inherit;">Digite o nome para cadastrar mesmo assim:</label>
-      <input id="nomeNovo" placeholder="Nome / descrição do produto"></div>`;
+    box.innerHTML=`<div class="alertbox a-red" style="margin-top:10px;">Produto não encontrado no catálogo da rede. Cadastre este EAN no VR Controller e aguarde a próxima sincronização (5h).</div>`;
   }
 }
 async function toggleScan(){
@@ -396,17 +394,13 @@ async function salvarContagem(){
   if(!val || !(qtd>0)) return alert("Informe validade e quantidade.");
   loading(true);
   try{
-    // auto-cadastro se o produto ainda não é acompanhado
+    // auto-cadastro se o produto ainda não é acompanhado — só via catálogo do VR
     if(!prodAtual){
-      let novo=null;
-      if(catAtual){
-        novo = {ean, id_produto:catAtual.id_produto, descricao:catAtual.descricao};
-      } else {
-        const inp=document.getElementById("nomeNovo");
-        const nome = inp? inp.value.trim() : "";
-        if(!nome){ loading(false); return alert("Produto não encontrado no catálogo — digite o nome no campo vermelho para cadastrar."); }
-        novo = {ean, descricao:nome};
+      if(!catAtual){
+        loading(false);
+        return alert("Produto não está no catálogo da rede. Cadastre-o no VR Controller e aguarde a sincronização (5h da manhã).");
       }
+      const novo = {ean, id_produto:catAtual.id_produto, descricao:catAtual.descricao};
       const {data:pr,error:ep} = await sb.from("produtos").upsert(novo,{onConflict:"ean"}).select().single();
       if(ep) throw ep;
       prodAtual = pr;
@@ -430,15 +424,17 @@ async function salvarContagem(){
 
 /* ================= CALENDÁRIO (PREVENÇÃO) ================= */
 function vCalendario(){
-  const zerados = cache.lotes.filter(l=>l.zerado && !l.resolvido);
-  const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)<=60);
+  const zerados = cache.lotes.filter(l=>(l.zerado || diasAte(l.validade)<0) && !l.resolvido);
+  const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0 && diasAte(l.validade)<=60);
   const grupos={};
   ativos.forEach(l=>{ (grupos[l.validade]=grupos[l.validade]||[]).push(l); });
   let html = zerados.map(l=>{
     const pn = precoNormal(l);
-    return `<div class="alertbox a-green">✅ <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) zerou a contagem crítica.
-      ${pn?`Voltar ao preço normal de <b>${brl(pn)}</b>.`:""}
-      <button class="btn-ok btn-sm" onclick="resolver('${l.id}')">Preço normalizado</button></div>`;
+    const venceu = diasAte(l.validade)<0;
+    const motivo = l.zerado ? "zerou a contagem crítica" : "passou da validade";
+    return `<div class="alertbox a-green">${venceu?'⚠️':'✅'} <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) ${motivo}.
+      ${pn?`Voltar ao preço normal de <b>${brl(pn)}</b>${venceu?' e retirar sobras.':'.'}`:''}
+      <button class="btn-ok btn-sm" onclick="resolver('${l.id}')">${venceu?'Retirado / normalizado':'Preço normalizado'}</button></div>`;
   }).join("");
   if(!Object.keys(grupos).length && !zerados.length) html+='<div class="card"><p class="muted">Nenhum item com data crítica nos próximos 60 dias.</p></div>';
   for(const [data,ls] of Object.entries(grupos)){
@@ -648,36 +644,19 @@ async function marcarEnviado(){
 
 /* ================= CADASTRO ================= */
 async function vCadastro(){
-  const {data:prods} = await sb.from("produtos").select("*").order("descricao").limit(200);
+  const {data:prods} = await sb.from("produtos").select("*").order("descricao").limit(500);
   return `<div class="card">
-    <h2>Adicionar produto ao acompanhamento</h2>
-    <label>EAN</label><input id="pean" inputmode="numeric">
-    <label>Nome / descrição</label><input id="pnome">
-    <button class="btn-p" onclick="addProduto()">Adicionar produto</button>
-    <p class="muted" style="margin-top:8px;">Preço, custo, estoque e vendas chegam pela sincronização diária com o VR.</p>
+    <h2>Como o acompanhamento funciona</h2>
+    <p class="muted" style="line-height:1.5;">Todo produto cadastrado no VR Controller (com EAN) já está disponível no app. Basta o operador escanear na aba <b>📷 Contagem</b> — o app reconhece o item pelo catálogo e cria o acompanhamento sozinho.<br><br>Preço, custo, estoque e vendas chegam pela sincronização diária às 5h. Quando um lote zera a contagem ou vence, o app volta a usar o estoque do VR para aquele item.</p>
   </div>
   <div class="card">
-    <h2>Produtos acompanhados (${(prods||[]).length})</h2>
-    ${(prods||[]).map(p=>`<div class="item"><div><div class="t">${p.descricao}</div><div class="s">${p.ean}</div></div></div>`).join("")||'<p class="muted">Nenhum ainda.</p>'}
+    <h2>Produtos em acompanhamento (${(prods||[]).length})</h2>
+    ${(prods||[]).map(p=>`<div class="item"><div><div class="t">${p.descricao}</div><div class="s">${p.ean}</div></div></div>`).join("")||'<p class="muted">Nenhum ainda — comece escaneando um produto na aba Contagem.</p>'}
   </div>
   <div class="card">
     <h2>Usuários (${cache.usuarios.length})</h2>
     ${cache.usuarios.map(u=>`<div class="item"><div><div class="t">${u.nome}</div><div class="s">${PAPEIS[u.papel]} · ${LOJAS[u.loja]}</div></div></div>`).join("")}
   </div>`;
-}
-async function addProduto(){
-  const ean=document.getElementById("pean").value.trim(), nome=document.getElementById("pnome").value.trim();
-  if(!ean || !nome) return alert("Preencha EAN e nome.");
-  loading(true);
-  try{
-    const {error} = await sb.from("produtos").insert({ean, descricao:nome});
-    if(error) throw error;
-    alert("Produto adicionado ao acompanhamento.");
-  }catch(e){
-    if(String(e.message).includes("duplicate")) alert("Esse EAN já está cadastrado.");
-    else erroDB(e);
-  }
-  loading(false); render();
 }
 
 /* ================= INIT ================= */
