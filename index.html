@@ -230,6 +230,7 @@ async function render(){
     else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
+    else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
   }catch(e){ v.innerHTML = `<div class="alertbox a-red">⚠️ ${e.message||e}<br><button class="btn-s btn-sm" onclick="render()">Tentar de novo</button></div>`; }
 }
 async function histTodos(){
@@ -645,18 +646,79 @@ async function marcarEnviado(){
 /* ================= CADASTRO ================= */
 async function vCadastro(){
   const {data:prods} = await sb.from("produtos").select("*").order("descricao").limit(500);
+  const {data:allUsers} = await sb.from("usuarios").select("*").order("ativo",{ascending:false}).order("nome");
   return `<div class="card">
     <h2>Como o acompanhamento funciona</h2>
     <p class="muted" style="line-height:1.5;">Todo produto cadastrado no VR Controller (com EAN) já está disponível no app. Basta o operador escanear na aba <b>📷 Contagem</b> — o app reconhece o item pelo catálogo e cria o acompanhamento sozinho.<br><br>Preço, custo, estoque e vendas chegam pela sincronização diária às 5h. Quando um lote zera a contagem ou vence, o app volta a usar o estoque do VR para aquele item.</p>
   </div>
   <div class="card">
-    <h2>Produtos em acompanhamento (${(prods||[]).length})</h2>
-    ${(prods||[]).map(p=>`<div class="item"><div><div class="t">${p.descricao}</div><div class="s">${p.ean}</div></div></div>`).join("")||'<p class="muted">Nenhum ainda — comece escaneando um produto na aba Contagem.</p>'}
+    <h2>Usuários (${(allUsers||[]).length})</h2>
+    <p class="muted" style="margin-bottom:8px;">Toque em qualquer usuário para editar função, loja, ativar/desativar ou trocar o PIN.</p>
+    ${(allUsers||[]).map(u=>`<div class="item" onclick="go('usuario','${u.id}')" style="cursor:pointer; ${u.ativo?'':'opacity:.55'}"><div><div class="t">${u.nome} ${u.ativo?'':'<span class="badge" style="background:#78909C; font-size:10px;">INATIVO</span>'}</div><div class="s">${PAPEIS[u.papel]} · ${LOJAS[u.loja]||u.loja}</div></div><div style="color:var(--mut); font-size:20px;">›</div></div>`).join("")}
   </div>
   <div class="card">
-    <h2>Usuários (${cache.usuarios.length})</h2>
-    ${cache.usuarios.map(u=>`<div class="item"><div><div class="t">${u.nome}</div><div class="s">${PAPEIS[u.papel]} · ${LOJAS[u.loja]}</div></div></div>`).join("")}
+    <h2>Produtos em acompanhamento (${(prods||[]).length})</h2>
+    ${(prods||[]).map(p=>`<div class="item"><div><div class="t">${p.descricao}</div><div class="s">${p.ean}</div></div></div>`).join("")||'<p class="muted">Nenhum ainda — comece escaneando um produto na aba Contagem.</p>'}
   </div>`;
+}
+
+function vUsuario(id){
+  return `<div class="card"><p class="muted center">Carregando…</p></div>`;
+}
+async function carregarUsuarioEdit(id){
+  const {data:u,error} = await sb.from("usuarios").select("*").eq("id",id).single();
+  if(error){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${error.message}</div>`; return; }
+  const eu = sess && sess.id===u.id;
+  document.getElementById("view").innerHTML = `
+  <div class="card">
+    <h2>Editar usuário</h2>
+    <label>Nome</label><input id="euNome" value="${u.nome.replace(/"/g,'&quot;')}">
+    <div class="row">
+      <div><label>Função</label><select id="euPapel">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}" ${u.papel===k?'selected':''}>${v}</option>`).join("")}</select></div>
+      <div><label>Loja</label><select id="euLoja">${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${u.loja===k?'selected':''}>${v}</option>`).join("")}</select></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:14px;">
+      <input type="checkbox" id="euAtivo" ${u.ativo?'checked':''} style="width:auto; margin:0;">
+      <span>Usuário ativo (aparece na tela de login)</span>
+    </label>
+    ${eu?'<p class="muted" style="margin-top:8px;">⚠️ Este é o seu próprio usuário. Desativar aqui vai te desconectar.</p>':''}
+    <button class="btn-p" onclick="salvarUsuario('${u.id}')">Salvar alterações</button>
+  </div>
+  <div class="card">
+    <h2>Trocar PIN</h2>
+    <p class="muted">Deixe em branco para manter o PIN atual.</p>
+    <label>Novo PIN (4 dígitos)</label><input id="euPin" inputmode="numeric" maxlength="4" placeholder="0000" type="password">
+    <button class="btn-s" onclick="resetarPin('${u.id}')">Aplicar novo PIN</button>
+  </div>`;
+}
+async function salvarUsuario(id){
+  const nome=document.getElementById("euNome").value.trim();
+  if(!nome) return alert("Informe o nome.");
+  const dados = {nome, papel:document.getElementById("euPapel").value,
+    loja:document.getElementById("euLoja").value, ativo:document.getElementById("euAtivo").checked};
+  loading(true);
+  try{
+    const {error} = await sb.from("usuarios").update(dados).eq("id",id);
+    if(error) throw error;
+    if(sess.id===id && !dados.ativo){ alert("Você desativou o próprio usuário — desconectando."); logout(); return; }
+    if(sess.id===id) sess = {...sess, ...dados};
+    alert("Alterações salvas.");
+    goBack();
+  }catch(e){ erroDB(e); }
+  loading(false);
+}
+async function resetarPin(id){
+  const pin=document.getElementById("euPin").value.trim();
+  if(pin.length!==4 || !/^\d{4}$/.test(pin)) return alert("PIN precisa ter 4 dígitos.");
+  if(!confirm("Confirmar troca do PIN deste usuário?")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("usuarios").update({pin_hash:await sha256(pin)}).eq("id",id);
+    if(error) throw error;
+    document.getElementById("euPin").value="";
+    alert("PIN atualizado. Avise o usuário do novo PIN.");
+  }catch(e){ erroDB(e); }
+  loading(false);
 }
 
 /* ================= INIT ================= */
