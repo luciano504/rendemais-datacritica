@@ -209,7 +209,7 @@ function renderNav(){
   const n=document.getElementById("nav");
   if(!sess){ n.classList.add("hidden"); return; }
   n.classList.remove("hidden");
-  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["gestor","📊","Gestão",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
+  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["gestor","📊","Gestão",3],["fornec","💰","Fornec.",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
   n.innerHTML = tabs.filter(t=>nivel(sess.papel)>=t[3])
     .map(t=>`<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span class="ic">${t[1]}</span>${t[2]}</button>`).join("");
 }
@@ -231,6 +231,8 @@ async function render(){
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
+    else if(route.page==="fornec"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = '<div class="card center muted">Calculando…</div>'; await vFornec(); }
+    else if(route.page==="fornecdet"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = '<div class="card center muted">Carregando…</div>'; await vFornecDet(route.param); }
   }catch(e){ v.innerHTML = `<div class="alertbox a-red">⚠️ ${e.message||e}<br><button class="btn-s btn-sm" onclick="render()">Tentar de novo</button></div>`; }
 }
 async function histTodos(){
@@ -621,6 +623,156 @@ async function registrarVenda(id){
       await sb.from("precos_hist").update({vendido:Number(ult.vendido)+real}).eq("id",ult.id);
     }
     if(novo<=0) alert("🎉 Lote zerado! Alerta enviado à prevenção de perdas para normalizar o preço.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
+/* ================= FORNECEDORES ================= */
+function mesAtual(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
+function mesLabel(m){ const [y,mm]=m.split("-"); return ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"][parseInt(mm)-1]+"/"+y; }
+function mesPrev(m,n=1){ const [y,mm]=m.split("-").map(Number); const d=new Date(y,mm-1-n,1); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
+
+async function vFornec(){
+  const params = route.param || {};
+  const mes = params.mes || mesAtual();
+  const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+  const {data:ress,error} = await sb.from("ressarcimento_diario")
+    .select("id_fornecedor,nome_fornecedor,valor,qtd_vendida")
+    .gte("data",ini).lt("data",fim);
+  if(error){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${error.message}</div>`; return; }
+  const {data:pags} = await sb.from("pagamentos_fornecedor").select("id_fornecedor,valor").eq("mes_referencia",mes);
+
+  const agg = {};  // id_fornecedor -> {nome, gerado, unidades, pago}
+  ress.forEach(r=>{
+    if(!r.id_fornecedor) return;
+    const a = agg[r.id_fornecedor] || (agg[r.id_fornecedor]={nome:r.nome_fornecedor||"(sem nome)", gerado:0, unidades:0, pago:0});
+    a.gerado += Number(r.valor)||0; a.unidades += Number(r.qtd_vendida)||0;
+  });
+  (pags||[]).forEach(p=>{ if(agg[p.id_fornecedor]) agg[p.id_fornecedor].pago += Number(p.valor)||0; else agg[p.id_fornecedor]={nome:"(sem nome)",gerado:0,unidades:0,pago:Number(p.valor)||0}; });
+
+  const lista = Object.entries(agg).map(([id,a])=>({id:parseInt(id),...a,saldo:a.gerado-a.pago}))
+    .sort((a,b)=>b.saldo-a.saldo);
+  const totGer = lista.reduce((a,x)=>a+x.gerado,0);
+  const totPag = lista.reduce((a,x)=>a+x.pago,0);
+  const anterior = mesPrev(mes), proximo = mesPrev(mes,-1);
+  const eAtual = (mes===mesAtual());
+
+  document.getElementById("view").innerHTML = `
+  <div class="ress"><div><div class="l">Saldo devedor · ${mesLabel(mes)}</div><div class="v">${brl(totGer-totPag)}</div></div><div style="font-size:26px;">🧾</div></div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">${brl(totGer)}</div><div class="l">Gerado no mês</div></div>
+    <div class="kpi"><div class="v">${brl(totPag)}</div><div class="l">Pago no mês</div></div>
+    <div class="kpi"><div class="v">${lista.length}</div><div class="l">Fornecedores</div></div>
+  </div>
+  <div class="row" style="margin-bottom:12px;">
+    <button class="btn-s btn-sm" style="flex:1; margin:0; padding:10px;" onclick="go('fornec',{mes:'${anterior}'})">‹ ${mesLabel(anterior)}</button>
+    ${eAtual?'<div style="flex:1; text-align:center; padding:10px; font-weight:600; color:var(--navy);">Mês atual</div>'
+      :`<button class="btn-s btn-sm" style="flex:1; margin:0; padding:10px;" onclick="go('fornec',{mes:'${mesAtual()}'})">Voltar ao atual</button>`}
+    ${eAtual?'<div style="flex:1;"></div>':`<button class="btn-s btn-sm" style="flex:1; margin:0; padding:10px;" onclick="go('fornec',{mes:'${proximo}'})">${mesLabel(proximo)} ›</button>`}
+  </div>
+  <h3 class="sec">Fornecedores — maior saldo devedor primeiro</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${lista.length? lista.map(f=>{
+    const status = f.saldo<=0.01 ? '<span class="badge" style="background:var(--ok)">QUITADO</span>'
+                   : (f.pago>0 ? `<span class="badge" style="background:#F57F17">PARCIAL</span>`
+                   : `<span class="badge" style="background:var(--danger)">DEVEDOR</span>`);
+    return `<div class="item" onclick="go('fornecdet',{id:${f.id},mes:'${mes}'})" style="cursor:pointer;">
+      <div style="flex:1;"><div class="t">${f.nome}</div>
+      <div class="s">Gerado ${brl(f.gerado)} · Pago ${brl(f.pago)} · ${Math.round(f.unidades)} un</div></div>
+      <div style="text-align:right;"><div style="font-weight:800; color:${f.saldo>0.01?'var(--danger)':'var(--ok)'}">${brl(f.saldo)}</div>${status}</div>
+    </div>`;
+  }).join("") : '<p class="muted">Nenhum ressarcimento neste mês.</p>'}
+  </div>`;
+}
+
+async function vFornecDet(param){
+  const id = param.id, mes = param.mes || mesAtual();
+  const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+  const {data:ress} = await sb.from("ressarcimento_diario")
+    .select("*, lotes(validade,qtd_inicial), produtos:ean(descricao)")
+    .eq("id_fornecedor",id).gte("data",ini).lt("data",fim).order("data",{ascending:true});
+  const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").eq("id_fornecedor",id).eq("mes_referencia",mes).order("criado_em");
+
+  // agrupar por EAN+loja
+  const grupos = {};
+  (ress||[]).forEach(r=>{
+    const k = r.ean+"|"+r.loja;
+    const g = grupos[k] || (grupos[k]={ean:r.ean, loja:r.loja, descricao:(r.produtos||{}).descricao, unidades:0, valor:0, dias:{}});
+    g.unidades += Number(r.qtd_vendida)||0;
+    g.valor += Number(r.valor)||0;
+    g.dias[r.data] = (g.dias[r.data]||0) + (Number(r.valor)||0);
+  });
+  const itens = Object.values(grupos).sort((a,b)=>b.valor-a.valor);
+  const nome = (ress&&ress[0]&&ress[0].nome_fornecedor) || (pags&&pags[0]&&pags[0].nome_fornecedor) || "Fornecedor";
+  const totGer = itens.reduce((a,x)=>a+x.valor,0);
+  const totPag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
+  const saldo = totGer - totPag;
+
+  document.getElementById("view").innerHTML = `
+  <div class="card">
+    <h2>${nome}</h2>
+    <p class="muted">${mesLabel(mes)}</p>
+    <div class="kpis" style="margin-top:12px;">
+      <div class="kpi"><div class="v">${brl(totGer)}</div><div class="l">Total a ressarcir</div></div>
+      <div class="kpi"><div class="v">${brl(totPag)}</div><div class="l">Já ressarcido</div></div>
+      <div class="kpi ${saldo>0.01?'red':''}"><div class="v" style="color:${saldo>0.01?'var(--danger)':'var(--ok)'}">${brl(saldo)}</div><div class="l">Saldo devedor</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Registrar recebimento</h2>
+    <p class="muted">Só o gestor pode dar aval de quitação (parcial ou total).</p>
+    <label>Valor recebido (R$)</label><input id="pagValor" type="number" step="0.01" placeholder="0,00">
+    <label>Descrição / referência (nota, boleto, forma)</label><input id="pagDesc" placeholder="Ex: NC 12345, boleto 07/2026">
+    <button class="btn-p" onclick="registrarPagamento(${id},'${nome.replace(/'/g,'')}', '${mes}')">Registrar recebimento</button>
+  </div>
+
+  ${pags && pags.length ? `<div class="card">
+    <h2>Recebimentos deste mês</h2>
+    ${pags.map(p=>`<div class="item"><div><div class="t">${brl(p.valor)}</div><div class="s">${fmtData(p.criado_em)} · ${p.aval_por_nome||'?'} · ${p.descricao||''}</div></div>${sess.papel==='gestor'?`<button class="btn-s btn-sm" style="flex:0 0 auto; margin:0;" onclick="excluirPagamento(${p.id})">Excluir</button>`:''}</div>`).join("")}
+  </div>`:''}
+
+  <h3 class="sec">Itens ressarcidos</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${itens.length? itens.map(i=>{
+    const dias = Object.entries(i.dias).sort();
+    return `<div class="item" style="flex-direction:column; align-items:stretch;">
+      <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+        <div style="flex:1;"><div class="t">${i.descricao||i.ean}</div>
+        <div class="s">${LOJAS[i.loja]||i.loja} · ${Math.round(i.unidades)} un vendidas com desconto</div></div>
+        <div class="num" style="color:var(--danger)">${brl(i.valor)}</div>
+      </div>
+      <details style="margin-top:8px; font-size:12px; color:var(--mut);"><summary style="cursor:pointer;">Detalhamento por dia (${dias.length})</summary>
+      <div style="padding:8px 0; font-family:ui-monospace,Menlo,monospace;">${dias.map(([d,v])=>`${fmtData(d)} — ${brl(v)}`).join("<br>")}</div>
+      </details>
+    </div>`;
+  }).join("") : '<p class="muted">Sem itens neste mês.</p>'}
+  </div>`;
+}
+
+async function registrarPagamento(idFornec, nomeFornec, mes){
+  const v = parseFloat(document.getElementById("pagValor").value);
+  const d = document.getElementById("pagDesc").value.trim();
+  if(!(v>0)) return alert("Informe um valor válido.");
+  if(!confirm(`Confirmar recebimento de ${brl(v)} do fornecedor ${nomeFornec} referente a ${mesLabel(mes)}?`)) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("pagamentos_fornecedor").insert({
+      id_fornecedor:idFornec, nome_fornecedor:nomeFornec,
+      mes_referencia:mes, valor:v, descricao:d,
+      aval_por:sess.id, aval_por_nome:sess.nome
+    });
+    if(error) throw error;
+    alert("Recebimento registrado.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+async function excluirPagamento(id){
+  if(!confirm("Excluir este registro de recebimento? O histórico do lançamento fica no log mas o valor deixa de contar.")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("pagamentos_fornecedor").delete().eq("id",id);
+    if(error) throw error;
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
