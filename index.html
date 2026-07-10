@@ -222,6 +222,21 @@ async function render(){
     document.getElementById("hSub").textContent = sess.nome+" · "+LOJAS[sess.loja]; }
   else document.getElementById("hSub").textContent = "Controle de mercadorias próximas do vencimento";
   renderNav();
+  // proteção: rotas exclusivas do gestor
+  const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet"];
+  const rotasPrev = ["calendario"];
+  if(sess){
+    if(rotasGestor.includes(route.page) && nivel(sess.papel)<3){
+      v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é exclusiva do gestor.</div>';
+      return;
+    }
+    if(rotasPrev.includes(route.page) && nivel(sess.papel)<2){
+      v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é para Prevenção de perdas ou Gestor.</div>';
+      return;
+    }
+  } else if(route.page!=="login"){
+    route={page:"login",param:null,prev:[]}; renderNav();
+  }
   try{
     if(route.page==="login"){ await carregarUsuarios(); v.innerHTML = vLogin(); }
     else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
