@@ -481,7 +481,10 @@ function vGestor(){
     <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
   </div>
   ${urg.length?`<div class="alertbox a-red">⚠️ <b>${urg.length} item(ns) a 10 dias ou menos do vencimento.</b> Priorize preço/transferência.</div>`:""}
-  <button class="btn-p" onclick="go('relatorio')">📄 Relatório para equipe de apoio</button>
+  <div class="row">
+    <button class="btn-p" onclick="go('relatorio')">📄 Relatório apoio</button>
+    <button class="btn-s" onclick="pedirSync()">🔄 Atualizar do VR</button>
+  </div>
   <h3 class="sec">Prioridade: data mais próxima · maior quantidade</h3>
   <div class="card" style="padding:6px 16px;">
   ${ativos.map(l=>{
@@ -562,6 +565,21 @@ function vItem(id){
     <p class="muted" style="margin-top:6px;">Quando a sincronização diária com o VR estiver ativa, as vendas baixam sozinhas.</p>
   </div>`;
 }
+async function pedirSync(){
+  if(!confirm("Solicitar atualização dos dados do VR agora?\n\nUsado quando você acabou de cadastrar produtos novos e quer os preços/estoques imediatamente. A execução acontece em até 5 minutos.")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("sync_solicitacoes").insert({solicitado_por: sess.nome});
+    if(error) throw error;
+    alert("✅ Solicitação enviada.\n\nA sincronização começa em até 5 minutos e leva mais 2-3 min pra concluir. Recarregue a tela depois para ver os dados atualizados.");
+  }catch(e){
+    if(String(e.message||"").toLowerCase().includes("sync_solicitacoes")){
+      alert("O botão de sync sob demanda ainda não foi ativado no banco. Peça ao suporte para rodar o SQL de setup.");
+    } else erroDB(e);
+  }
+  loading(false);
+}
+
 async function aplicarPreco(id){
   const l=cache.lotes.find(x=>x.id===id);
   const np=parseFloat(document.getElementById("novoPreco").value);
