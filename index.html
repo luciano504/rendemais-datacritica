@@ -703,16 +703,24 @@ async function vFornec(){
 async function vFornecDet(param){
   const id = param.id, mes = param.mes || mesAtual();
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
-  const {data:ress} = await sb.from("ressarcimento_diario")
-    .select("*, lotes(validade,qtd_inicial), produtos:ean(descricao)")
+  const {data:ress,error:eR} = await sb.from("ressarcimento_diario")
+    .select("*")
     .eq("id_fornecedor",id).gte("data",ini).lt("data",fim).order("data",{ascending:true});
+  if(eR){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${eR.message}</div>`; return; }
   const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").eq("id_fornecedor",id).eq("mes_referencia",mes).order("criado_em");
+  // buscar descrições dos produtos separadamente (sem depender de FK no embed)
+  const eans = [...new Set((ress||[]).map(r=>r.ean))];
+  const descrMap = {};
+  if(eans.length){
+    const {data:prods} = await sb.from("produtos").select("ean,descricao").in("ean",eans);
+    (prods||[]).forEach(p=>{ descrMap[p.ean] = p.descricao; });
+  }
 
   // agrupar por EAN+loja
   const grupos = {};
   (ress||[]).forEach(r=>{
     const k = r.ean+"|"+r.loja;
-    const g = grupos[k] || (grupos[k]={ean:r.ean, loja:r.loja, descricao:(r.produtos||{}).descricao, unidades:0, valor:0, dias:{}});
+    const g = grupos[k] || (grupos[k]={ean:r.ean, loja:r.loja, descricao:descrMap[r.ean]||r.ean, unidades:0, valor:0, dias:{}});
     g.unidades += Number(r.qtd_vendida)||0;
     g.valor += Number(r.valor)||0;
     g.dias[r.data] = (g.dias[r.data]||0) + (Number(r.valor)||0);
