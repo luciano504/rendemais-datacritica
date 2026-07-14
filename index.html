@@ -39,6 +39,7 @@
   nav button.on{color:var(--navy); font-weight:700;}
   nav button .ic{font-size:20px; line-height:1;}
   .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; color:#fff;}
+  .badge-loja{display:inline-block; padding:2px 7px; border-radius:6px; font-size:11px; font-weight:800; color:#fff; letter-spacing:.3px; margin-right:6px;}
   .item{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--line);}
   .item:last-child{border-bottom:none;}
   .item .t{font-weight:600; font-size:15px;}
@@ -92,6 +93,8 @@ const SUPABASE_KEY = "sb_publishable_l14fjxQmWUeu5OXlZJ35GA_-X3ESkgZ";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const LOJAS = {L01:"L01 Veneza",L02:"L02 Máximo",L03:"L03 Royal",L05:"L05 Alvorada",L08:"L08 Tradição",L09:"L09 Massangana"};
+const LOJA_COR = {L01:"#1976D2", L02:"#388E3C", L03:"#C2185B", L05:"#F57C00", L08:"#7B1FA2", L09:"#00838F"};
+function badgeLoja(cod){ return `<span class="badge-loja" style="background:${LOJA_COR[cod]||'#607D8B'}">${cod}</span>`; }
 const PAPEIS = {operador:"Operador",prevencao:"Prevenção de perdas",gestor:"Gestor"};
 const JANELA_SEG = 5, DEGRAU = 0.15, UPLIFT = 0.30, MAX_DEGRAUS = 3, DIAS_VMD = 14;
 
@@ -219,7 +222,8 @@ async function render(){
   document.getElementById("btnBack").classList.toggle("hidden", route.prev.length===0 || route.page==="login");
   document.getElementById("hRole").classList.toggle("hidden", !sess);
   if(sess){ document.getElementById("hRole").textContent = PAPEIS[sess.papel];
-    document.getElementById("hSub").textContent = sess.nome+" · "+LOJAS[sess.loja]; }
+    const lojaTxt = sess.papel==="gestor" ? "Todas as lojas" : LOJAS[sess.loja];
+    document.getElementById("hSub").textContent = sess.nome+" · "+lojaTxt; }
   else document.getElementById("hSub").textContent = "Controle de mercadorias próximas do vencimento";
   renderNav();
   // proteção: rotas exclusivas do gestor
@@ -274,12 +278,18 @@ function vLogin(){
     <p class="muted">Cadastro simples, apenas para registrar a responsabilidade das ações.</p>
     <label>Nome</label><input id="cnome" placeholder="Nome completo">
     <div class="row">
-      <div><label>Função</label><select id="cpapel">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
+      <div><label>Função</label><select id="cpapel" onchange="toggleCadLoja()">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
       <div><label>Loja</label><select id="cloja">${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
     </div>
     <label>PIN (4 dígitos)</label><input id="cpin" inputmode="numeric" maxlength="4" placeholder="0000">
     <button class="btn-s" onclick="doCadUser()">Cadastrar</button>
   </div>`;
+}
+function toggleCadLoja(){
+  const p = document.getElementById("cpapel").value;
+  const sel = document.getElementById("cloja");
+  if(p==="gestor"){ sel.disabled=true; sel.style.opacity=".5"; }
+  else { sel.disabled=false; sel.style.opacity="1"; }
 }
 async function doLogin(){
   const id = document.getElementById("luser").value;
@@ -311,11 +321,20 @@ async function doCadUser(){
 
 /* ================= CONTAGEM (OPERADOR) ================= */
 let scanStream=null, scanTimer=null, zxReader=null;
+let lojaContagem = null; // gestor precisa escolher; outros ficam com a própria
 function vContagem(){
-  const meus = cache.lotes.filter(l=>l.loja===sess.loja && String(l.criado_em).slice(0,10)===hoje()).slice(0,8);
+  if(sess.papel !== "gestor") lojaContagem = sess.loja;
+  const meus = cache.lotes.filter(l=>l.loja===(lojaContagem||sess.loja) && String(l.criado_em).slice(0,10)===hoje()).slice(0,8);
+  const seletorLoja = sess.papel==="gestor" ? `
+    <label>Loja onde está contando</label>
+    <select id="lojaCont" onchange="setLojaContagem(this.value)">
+      <option value="">— escolha a loja —</option>
+      ${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${lojaContagem===k?'selected':''}>${v}</option>`).join("")}
+    </select>` : "";
   return `
   <div class="card">
     <h2>Registrar produto com data crítica</h2>
+    ${seletorLoja}
     <label>Código EAN</label>
     <div class="row">
       <input id="ean" inputmode="numeric" placeholder="Digite ou escaneie o código">
@@ -329,14 +348,15 @@ function vContagem(){
     <button class="btn-p" onclick="salvarContagem()">Salvar contagem</button>
   </div>
   <div class="card">
-    <h2>Contagens de hoje — ${LOJAS[sess.loja]}</h2>
+    <h2>Contagens de hoje — ${LOJAS[lojaContagem||sess.loja]||"(escolha a loja)"}</h2>
     ${meus.length? meus.map(l=>{
       const d=diasAte(l.validade), b=bucket(d);
-      return `<div class="item"><div><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div><div class="s">${Number(l.qtd_inicial)} un · vence ${fmtData(l.validade)} · por ${l.criado_por_nome||""}</div></div>
+      return `<div class="item"><div><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div><div class="s">${Number(l.qtd_inicial)} un · vence ${fmtData(l.validade)} · por ${l.criado_por_nome||""}</div></div>
       <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span></div>`;
     }).join(""):'<p class="muted">Nenhuma contagem hoje.</p>'}
   </div>`;
 }
+function setLojaContagem(v){ lojaContagem = v||null; render(); }
 function initScanUI(){
   const ean=document.getElementById("ean");
   if(ean) ean.addEventListener("input", buscaProduto);
@@ -409,6 +429,8 @@ async function salvarContagem(){
   const ean=document.getElementById("ean").value.trim();
   const val=document.getElementById("val").value;
   const qtd=parseFloat(document.getElementById("qtd").value);
+  const loja = sess.papel==="gestor" ? lojaContagem : sess.loja;
+  if(!loja) return alert("Escolha a loja onde está contando.");
   if(!val || !(qtd>0)) return alert("Informe validade e quantidade.");
   loading(true);
   try{
@@ -423,10 +445,48 @@ async function salvarContagem(){
       if(ep) throw ep;
       prodAtual = pr;
     }
-    const pl = ploja(ean, sess.loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",sess.loja).maybeSingle()).data;
+    // já existe lote ativo do mesmo produto nesta loja?
+    const {data:existentes} = await sb.from("lotes").select("*")
+      .eq("ean",ean).eq("loja",loja).eq("resolvido",false).eq("zerado",false);
+    if(existentes && existentes.length){
+      loading(false);
+      const lote = existentes[0];  // pega o primeiro; raro ter múltiplos
+      const opcao = prompt(
+        `Já existe contagem aberta deste produto em ${LOJAS[loja]}:\n\n`+
+        `• Quantidade atual: ${lote.qtd_restante} un\n`+
+        `• Validade registrada: ${fmtData(lote.validade)}\n\n`+
+        `Digite:\n`+
+        `  1 = CORRIGIR quantidade para ${qtd}\n`+
+        `  2 = SOMAR ${qtd} à quantidade existente\n`+
+        `  (qualquer outra tecla) = CANCELAR`);
+      if(opcao === "1"){
+        loading(true);
+        const {error} = await sb.from("lotes").update({
+          qtd_inicial: qtd, qtd_restante: qtd, validade: val,
+          criado_por: sess.id, criado_por_nome: sess.nome, criado_em: new Date().toISOString()
+        }).eq("id", lote.id);
+        if(error) throw error;
+        alert(`Quantidade corrigida para ${qtd} un.`);
+      } else if(opcao === "2"){
+        loading(true);
+        const nq = Number(lote.qtd_inicial) + qtd;
+        const nr = Number(lote.qtd_restante) + qtd;
+        const {error} = await sb.from("lotes").update({qtd_inicial: nq, qtd_restante: nr}).eq("id", lote.id);
+        if(error) throw error;
+        alert(`Quantidade somada. Agora: ${nr} un.`);
+      } else {
+        alert("Contagem cancelada.");
+        return;
+      }
+      document.getElementById("ean").value=""; document.getElementById("val").value="";
+      document.getElementById("qtd").value=""; document.getElementById("pinfo").innerHTML="";
+      prodAtual=null; catAtual=null;
+      loading(false); render(); return;
+    }
+    const pl = ploja(ean, loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",loja).maybeSingle()).data;
     const preco = pl? Number(pl.preco_venda) : null;
     const {data:lote,error} = await sb.from("lotes").insert({
-      ean, loja:sess.loja, validade:val, qtd_inicial:qtd, qtd_restante:qtd,
+      ean, loja, validade:val, qtd_inicial:qtd, qtd_restante:qtd,
       preco_atual:preco, criado_por:sess.id, criado_por_nome:sess.nome
     }).select().single();
     if(error) throw error;
@@ -463,7 +523,7 @@ function vCalendario(){
       const pn=precoNormal(l);
       const promo = l.preco_atual && pn && Number(l.preco_atual)<pn;
       return `<div class="item" onclick="${nivel(sess.papel)>=3?`go('itemdet','${l.id}')`:''}" style="${nivel(sess.papel)>=3?'cursor:pointer;':''}">
-        <div style="flex:1;"><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div>
+        <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
           <div class="s">${LOJAS[l.loja]} · falta zerar <b>${Number(l.qtd_restante)}</b> de ${Number(l.qtd_inicial)} un ${promo?'· promo '+brl(l.preco_atual):''}</div>
           <div class="daybar" style="background:${b.cor}; width:${Math.min(100,Math.round(l.qtd_restante/l.qtd_inicial*100))}%;"></div></div>
         <div class="num" style="color:${b.cor}">${Number(l.qtd_restante)}</div>
@@ -507,7 +567,7 @@ function vGestor(){
   ${ativos.map(l=>{
     const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
     return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
-      <div style="flex:1;"><div class="t">${l.produtos?l.produtos.descricao:l.ean}</div>
+      <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
       <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}</div></div>
       <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
     </div>`;
@@ -761,7 +821,7 @@ async function vFornecDet(param){
     const dias = Object.entries(i.dias).sort();
     return `<div class="item" style="flex-direction:column; align-items:stretch;">
       <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-        <div style="flex:1;"><div class="t">${i.descricao||i.ean}</div>
+        <div style="flex:1;"><div class="t">${badgeLoja(i.loja)}${i.descricao||i.ean}</div>
         <div class="s">${LOJAS[i.loja]||i.loja} · ${Math.round(i.unidades)} un vendidas com desconto</div></div>
         <div class="num" style="color:var(--danger)">${brl(i.valor)}</div>
       </div>
@@ -862,19 +922,21 @@ async function carregarUsuarioEdit(id){
   const {data:u,error} = await sb.from("usuarios").select("*").eq("id",id).single();
   if(error){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${error.message}</div>`; return; }
   const eu = sess && sess.id===u.id;
+  const isGestor = u.papel==="gestor";
   document.getElementById("view").innerHTML = `
   <div class="card">
     <h2>Editar usuário</h2>
     <label>Nome</label><input id="euNome" value="${u.nome.replace(/"/g,'&quot;')}">
     <div class="row">
-      <div><label>Função</label><select id="euPapel">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}" ${u.papel===k?'selected':''}>${v}</option>`).join("")}</select></div>
-      <div><label>Loja</label><select id="euLoja">${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${u.loja===k?'selected':''}>${v}</option>`).join("")}</select></div>
+      <div><label>Função</label><select id="euPapel" onchange="toggleEuLoja()">${Object.entries(PAPEIS).map(([k,v])=>`<option value="${k}" ${u.papel===k?'selected':''}>${v}</option>`).join("")}</select></div>
+      <div><label>Loja</label>
+        <select id="euLoja" ${isGestor?'disabled style="opacity:.5"':''}>
+          ${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${u.loja===k?'selected':''}>${v}</option>`).join("")}
+        </select>
+        <div id="euLojaHint" class="muted" style="font-size:12px; margin-top:4px;">${isGestor?"Gestor tem acesso a todas as lojas":""}</div>
+      </div>
     </div>
-    <label style="display:flex; align-items:center; gap:8px; margin-top:14px;">
-      <input type="checkbox" id="euAtivo" ${u.ativo?'checked':''} style="width:auto; margin:0;">
-      <span>Usuário ativo (aparece na tela de login)</span>
-    </label>
-    ${eu?'<p class="muted" style="margin-top:8px;">⚠️ Este é o seu próprio usuário. Desativar aqui vai te desconectar.</p>':''}
+    ${eu?'<p class="muted" style="margin-top:12px;">⚠️ Este é o seu próprio usuário.</p>':''}
     <button class="btn-p" onclick="salvarUsuario('${u.id}')">Salvar alterações</button>
   </div>
   <div class="card">
@@ -882,18 +944,56 @@ async function carregarUsuarioEdit(id){
     <p class="muted">Deixe em branco para manter o PIN atual.</p>
     <label>Novo PIN (4 dígitos)</label><input id="euPin" inputmode="numeric" maxlength="4" placeholder="0000" type="password">
     <button class="btn-s" onclick="resetarPin('${u.id}')">Aplicar novo PIN</button>
-  </div>`;
+  </div>
+  ${u.ativo? `<div class="card">
+    <h2>Desativar usuário</h2>
+    <p class="muted">O usuário some da lista de login e não consegue mais entrar. O histórico de ações fica preservado (contagens, aplicações de preço, avais de pagamento continuam mostrando o nome dele).</p>
+    <button class="btn-danger" onclick="desativarUsuario('${u.id}','${u.nome.replace(/'/g,"\\'")}')">Desativar ${u.nome}</button>
+  </div>` : `<div class="card">
+    <h2>Usuário desativado</h2>
+    <p class="muted">Este usuário está inativo. Se quiser reativar:</p>
+    <button class="btn-s" onclick="reativarUsuario('${u.id}')">Reativar usuário</button>
+  </div>`}`;
+}
+function toggleEuLoja(){
+  const p = document.getElementById("euPapel").value;
+  const sel = document.getElementById("euLoja");
+  const hint = document.getElementById("euLojaHint");
+  if(p==="gestor"){ sel.disabled=true; sel.style.opacity=".5"; hint.textContent="Gestor tem acesso a todas as lojas"; }
+  else { sel.disabled=false; sel.style.opacity="1"; hint.textContent=""; }
+}
+async function desativarUsuario(id, nome){
+  if(!confirm(`Confirmar desativação de ${nome}?\n\nEle não conseguirá mais fazer login. O histórico de ações fica preservado.`)) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("usuarios").update({ativo:false}).eq("id",id);
+    if(error) throw error;
+    if(sess.id===id){ alert("Você desativou o próprio usuário — desconectando."); logout(); return; }
+    alert("Usuário desativado.");
+    goBack();
+  }catch(e){ erroDB(e); }
+  loading(false);
+}
+async function reativarUsuario(id){
+  if(!confirm("Reativar este usuário?")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("usuarios").update({ativo:true}).eq("id",id);
+    if(error) throw error;
+    alert("Usuário reativado.");
+    goBack();
+  }catch(e){ erroDB(e); }
+  loading(false);
 }
 async function salvarUsuario(id){
   const nome=document.getElementById("euNome").value.trim();
   if(!nome) return alert("Informe o nome.");
   const dados = {nome, papel:document.getElementById("euPapel").value,
-    loja:document.getElementById("euLoja").value, ativo:document.getElementById("euAtivo").checked};
+    loja:document.getElementById("euLoja").value};
   loading(true);
   try{
     const {error} = await sb.from("usuarios").update(dados).eq("id",id);
     if(error) throw error;
-    if(sess.id===id && !dados.ativo){ alert("Você desativou o próprio usuário — desconectando."); logout(); return; }
     if(sess.id===id) sess = {...sess, ...dados};
     alert("Alterações salvas.");
     goBack();
