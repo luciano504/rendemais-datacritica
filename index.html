@@ -40,6 +40,10 @@
   nav button .ic{font-size:20px; line-height:1;}
   .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; color:#fff;}
   .badge-loja{display:inline-block; padding:2px 7px; border-radius:6px; font-size:11px; font-weight:800; color:#fff; letter-spacing:.3px; margin-right:6px;}
+  .chip{display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border:1px solid var(--line); border-radius:20px; background:#fff; color:var(--ink); font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; margin:0; width:auto;}
+  .chip.chip-on{background:var(--navy); color:#fff; border-color:var(--navy);}
+  .chip-n{background:rgba(0,0,0,.08); color:inherit; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:700;}
+  .chip.chip-on .chip-n{background:rgba(255,255,255,.2);}
   .item{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--line);}
   .item:last-child{border-bottom:none;}
   .item .t{font-weight:600; font-size:15px;}
@@ -130,7 +134,7 @@ async function carregarUsuarios(){
   cache.usuarios = data;
 }
 async function carregarLotes(){
-  let q = sb.from("lotes").select("*, produtos(descricao)").eq("resolvido",false).order("validade");
+  let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade");
   if(nivel(sess.papel)<3) q = q.eq("loja", sess.loja);
   const {data,error} = await q;
   if(error) throw error;
@@ -542,18 +546,34 @@ async function resolver(id){
 }
 
 /* ================= GESTOR ================= */
+let secaoFiltro = null;  // null = todas
+function secaoDo(l){ return (l.produtos && l.produtos.secao) || null; }
+
 function vGestor(){
-  const ls = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado)
+  const todosLotes = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado)
     .sort((a,b)=>{ const da=diasAte(a.validade), db=diasAte(b.validade);
       return da!==db ? da-db : Number(b.qtd_restante)-Number(a.qtd_restante); });
+  // seções presentes (com contagem)
+  const contSec = {};
+  todosLotes.forEach(l=>{ const s=secaoDo(l)||"(sem seção)"; contSec[s]=(contSec[s]||0)+1; });
+  const secoes = Object.entries(contSec).sort((a,b)=>b[1]-a[1]);
+  // aplicar filtro
+  const ls = secaoFiltro
+    ? todosLotes.filter(l=> (secaoDo(l)||"(sem seção)")===secaoFiltro)
+    : todosLotes;
   const ativos = ls.filter(l=>!l.zerado);
   const risco = ativos.reduce((a,l)=>a+custoRisco(l),0);
   const ress = ls.reduce((a,l)=>a+ressarcLote(l),0);
   const urg = ativos.filter(l=>diasAte(l.validade)<=10);
+  const chips = `
+  <div style="display:flex; gap:6px; overflow-x:auto; padding:8px 0 12px; margin:0 -14px; padding-left:14px; padding-right:14px; -webkit-overflow-scrolling:touch;">
+    <button class="chip ${!secaoFiltro?'chip-on':''}" onclick="setSecao(null)">Todos <span class="chip-n">${todosLotes.length}</span></button>
+    ${secoes.map(([s,n])=>`<button class="chip ${secaoFiltro===s?'chip-on':''}" onclick="setSecao('${s.replace(/'/g,"\\'")}')">${s} <span class="chip-n">${n}</span></button>`).join("")}
+  </div>`;
   return `
   <div class="ress"><div><div class="l">Ressarcimento a demandar dos fornecedores</div><div class="v">${brl(ress)}</div></div><div style="font-size:26px;">🧾</div></div>
   <div class="kpis">
-    <div class="kpi red"><div class="v">${brl(risco)}</div><div class="l">Custo em risco</div></div>
+    <div class="kpi red"><div class="v">${brl(risco)}</div><div class="l">Custo em risco${secaoFiltro?' — '+secaoFiltro:''}</div></div>
     <div class="kpi"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
     <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
   </div>
@@ -562,18 +582,21 @@ function vGestor(){
     <button class="btn-p" onclick="go('relatorio')">📄 Relatório apoio</button>
     <button class="btn-s" onclick="pedirSync()">🔄 Atualizar do VR</button>
   </div>
-  <h3 class="sec">Prioridade: data mais próxima · maior quantidade</h3>
+  ${chips}
+  <h3 class="sec">Prioridade: data mais próxima · maior quantidade${secaoFiltro?' · '+secaoFiltro:''}</h3>
   <div class="card" style="padding:6px 16px;">
   ${ativos.map(l=>{
     const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
+    const sec = secaoDo(l);
     return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
       <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
-      <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}</div></div>
+      <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}${sec?' · <span style="opacity:.75">'+sec+'</span>':''}</div></div>
       <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
     </div>`;
-  }).join("") || '<p class="muted">Nada em acompanhamento.</p>'}
+  }).join("") || '<p class="muted">Nenhum lote nessa seção.</p>'}
   </div>`;
 }
+function setSecao(s){ secaoFiltro=s; render(); }
 
 function vItem(id){
   const l=cache.lotes.find(x=>x.id===id);
