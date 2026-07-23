@@ -250,7 +250,7 @@ async function render(){
     else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
     else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); v.innerHTML = vGestor(); }
-    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l){ await carregarHist(l.id); if(!l.analisado_em){ try{ await sb.from("lotes").update({analisado_em:new Date().toISOString()}).eq("id",l.id); l.analisado_em=new Date().toISOString(); }catch(e){} } } v.innerHTML = vItem(route.param); }
+    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
@@ -682,6 +682,8 @@ function vItem(id){
     </div>
     <p class="muted" style="margin-top:6px;">Ao aplicar, o item entra no relatório da equipe de apoio.</p>`:""}
     ${l.preco_atual && pn && Number(l.preco_atual)<pn?`<button class="btn-s" onclick="voltarNormal('${l.id}')">Voltar ao preço normal (${brl(pn)})</button>`:""}
+    ${!l.analisado_em ? `<button class="btn-ok" onclick="marcarAnalisado('${l.id}')">✓ Manter preço · análise concluída</button>
+      <p class="muted" style="margin-top:6px; text-align:center;">Use este botão quando decidir que o preço atual está adequado e não precisa de rebaixa. O item sai da lista de "aguardando análise".</p>` : `<p class="muted" style="margin-top:8px; text-align:center;">✓ Já analisado em ${fmtData(l.analisado_em)}</p>`}
   </div>
 
   <div class="card">
@@ -722,6 +724,16 @@ async function pedirSync(){
   loading(false);
 }
 
+async function marcarAnalisado(id){
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({analisado_em:new Date().toISOString()}).eq("id",id);
+    if(error) throw error;
+    alert("✓ Marcado como analisado. O item saiu da lista de aguardando análise.");
+  }catch(e){ erroDB(e); }
+  loading(false); goBack();
+}
+
 async function aplicarPreco(id){
   const l=cache.lotes.find(x=>x.id===id);
   const np=parseFloat(document.getElementById("novoPreco").value);
@@ -741,7 +753,7 @@ async function voltarNormal(id){
   const l=cache.lotes.find(x=>x.id===id), pn=precoNormal(l);
   loading(true);
   try{
-    const {error} = await sb.from("lotes").update({preco_atual:pn, pend_apoio:true}).eq("id",id);
+    const {error} = await sb.from("lotes").update({preco_atual:pn, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
   }catch(e){ erroDB(e); }
