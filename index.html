@@ -250,7 +250,7 @@ async function render(){
     else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
     else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); v.innerHTML = vGestor(); }
-    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
+    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l){ await carregarHist(l.id); if(!l.analisado_em){ try{ await sb.from("lotes").update({analisado_em:new Date().toISOString()}).eq("id",l.id); l.analisado_em=new Date().toISOString(); }catch(e){} } } v.innerHTML = vItem(route.param); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
@@ -549,26 +549,61 @@ async function resolver(id){
 let secaoFiltro = null;  // null = todas
 function secaoDo(l){ return (l.produtos && l.produtos.secao) || null; }
 
-function vGestor(){
-  const todosLotes = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado)
-    .sort((a,b)=>{ const da=diasAte(a.validade), db=diasAte(b.validade);
+let ordenar = "prioridade";  // prioridade | recente | loja
+let apenasAnalisar = false;
+const ORDENACOES = {
+  prioridade:"Data · Quantidade",
+  recente:"Recém incluídos",
+  loja:"Por loja"
+};
+function ordenarLotes(arr){
+  const cp = arr.slice();
+  if(ordenar==="recente"){
+    cp.sort((a,b)=> String(b.criado_em).localeCompare(String(a.criado_em)));
+  } else if(ordenar==="loja"){
+    cp.sort((a,b)=>{
+      if(a.loja!==b.loja) return a.loja.localeCompare(b.loja);
+      const da=diasAte(a.validade), db=diasAte(b.validade);
+      return da!==db ? da-db : Number(b.qtd_restante)-Number(a.qtd_restante);
+    });
+  } else {
+    cp.sort((a,b)=>{ const da=diasAte(a.validade), db=diasAte(b.validade);
       return da!==db ? da-db : Number(b.qtd_restante)-Number(a.qtd_restante); });
+  }
+  return cp;
+}
+
+function vGestor(){
+  const todosLotes = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado);
   // seções presentes (com contagem)
   const contSec = {};
   todosLotes.forEach(l=>{ const s=secaoDo(l)||"(sem seção)"; contSec[s]=(contSec[s]||0)+1; });
   const secoes = Object.entries(contSec).sort((a,b)=>b[1]-a[1]);
-  // aplicar filtro
-  const ls = secaoFiltro
+  // aplicar filtros
+  let ls = secaoFiltro
     ? todosLotes.filter(l=> (secaoDo(l)||"(sem seção)")===secaoFiltro)
     : todosLotes;
+  if(apenasAnalisar) ls = ls.filter(l=> !l.analisado_em);
+  ls = ordenarLotes(ls);
   const ativos = ls.filter(l=>!l.zerado);
   const risco = ativos.reduce((a,l)=>a+custoRisco(l),0);
   const ress = ls.reduce((a,l)=>a+ressarcLote(l),0);
   const urg = ativos.filter(l=>diasAte(l.validade)<=10);
+  const pendAnalise = todosLotes.filter(l=> !l.analisado_em && !l.zerado);
   const chips = `
   <div style="display:flex; gap:6px; overflow-x:auto; padding:8px 0 12px; margin:0 -14px; padding-left:14px; padding-right:14px; -webkit-overflow-scrolling:touch;">
     <button class="chip ${!secaoFiltro?'chip-on':''}" onclick="setSecao(null)">Todos <span class="chip-n">${todosLotes.length}</span></button>
     ${secoes.map(([s,n])=>`<button class="chip ${secaoFiltro===s?'chip-on':''}" onclick="setSecao('${s.replace(/'/g,"\\'")}')">${s} <span class="chip-n">${n}</span></button>`).join("")}
+  </div>`;
+  const faixaAnalise = pendAnalise.length ? `
+  <div class="alertbox" style="background:#FFF3CD; color:#8A6D0B; border:1px solid #FFE082; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+    <div>🆕 <b>${pendAnalise.length} lote(s) aguardando análise</b> — decidir preço ou manter</div>
+    <button class="btn-sm" style="margin:0; padding:6px 12px; background:${apenasAnalisar?'#8A6D0B':'#fff'}; color:${apenasAnalisar?'#fff':'#8A6D0B'}; border:1px solid #8A6D0B; border-radius:8px; font-size:12px;" onclick="toggleAnalisar()">${apenasAnalisar?'Ver todos':'Ver só esses'}</button>
+  </div>` : "";
+  const seletorOrdem = `
+  <div style="display:flex; align-items:center; gap:8px; margin:14px 0 6px; font-size:12px; color:var(--mut);">
+    <span>Ordenar por:</span>
+    ${Object.entries(ORDENACOES).map(([k,v])=>`<button class="chip ${ordenar===k?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="setOrdem('${k}')">${v}</button>`).join("")}
   </div>`;
   return `
   <div class="ress"><div><div class="l">Ressarcimento a demandar dos fornecedores</div><div class="v">${brl(ress)}</div></div><div style="font-size:26px;">🧾</div></div>
@@ -577,26 +612,33 @@ function vGestor(){
     <div class="kpi"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
     <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
   </div>
+  ${faixaAnalise}
   ${urg.length?`<div class="alertbox a-red">⚠️ <b>${urg.length} item(ns) a 10 dias ou menos do vencimento.</b> Priorize preço/transferência.</div>`:""}
   <div class="row">
     <button class="btn-p" onclick="go('relatorio')">📄 Relatório apoio</button>
     <button class="btn-s" onclick="pedirSync()">🔄 Atualizar do VR</button>
   </div>
   ${chips}
-  <h3 class="sec">Prioridade: data mais próxima · maior quantidade${secaoFiltro?' · '+secaoFiltro:''}</h3>
+  ${seletorOrdem}
+  <h3 class="sec">${apenasAnalisar?'Aguardando análise':ORDENACOES[ordenar]}${secaoFiltro?' · '+secaoFiltro:''}</h3>
   <div class="card" style="padding:6px 16px;">
   ${ativos.map(l=>{
     const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
     const sec = secaoDo(l);
+    const marca = !l.analisado_em
+      ? `<span class="badge" style="background:#F9A825; font-size:10px; padding:2px 7px; margin-right:6px;">ANALISAR</span>`
+      : "";
     return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
-      <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
+      <div style="flex:1;"><div class="t">${marca}${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
       <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}${sec?' · <span style="opacity:.75">'+sec+'</span>':''}</div></div>
       <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
     </div>`;
-  }).join("") || '<p class="muted">Nenhum lote nessa seção.</p>'}
+  }).join("") || (apenasAnalisar?'<p class="muted">Nenhum lote aguardando análise 🎉</p>':'<p class="muted">Nenhum lote nessa seção.</p>')}
   </div>`;
 }
 function setSecao(s){ secaoFiltro=s; render(); }
+function setOrdem(o){ ordenar=o; render(); }
+function toggleAnalisar(){ apenasAnalisar=!apenasAnalisar; render(); }
 
 function vItem(id){
   const l=cache.lotes.find(x=>x.id===id);
@@ -688,7 +730,7 @@ async function aplicarPreco(id){
   if(custo && np<Number(custo) && !confirm("Preço abaixo do custo ("+brl(custo)+"). Confirmar mesmo assim?")) return;
   loading(true);
   try{
-    const {error} = await sb.from("lotes").update({preco_atual:np, pend_apoio:true}).eq("id",id);
+    const {error} = await sb.from("lotes").update({preco_atual:np, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:np, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
     alert("Preço aplicado. Item adicionado ao relatório da equipe de apoio.");
