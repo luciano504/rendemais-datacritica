@@ -683,7 +683,19 @@ function vItem(id){
     <p class="muted" style="margin-top:6px;">Ao aplicar, o item entra no relatório da equipe de apoio.</p>`:""}
     ${l.preco_atual && pn && Number(l.preco_atual)<pn?`<button class="btn-s" onclick="voltarNormal('${l.id}')">Voltar ao preço normal (${brl(pn)})</button>`:""}
     ${!l.analisado_em ? `<button class="btn-ok" onclick="marcarAnalisado('${l.id}')">✓ Manter preço · análise concluída</button>
-      <p class="muted" style="margin-top:6px; text-align:center;">Use este botão quando decidir que o preço atual está adequado e não precisa de rebaixa. O item sai da lista de "aguardando análise".</p>` : `<p class="muted" style="margin-top:8px; text-align:center;">✓ Já analisado em ${fmtData(l.analisado_em)}</p>`}
+      <p class="muted" style="margin-top:6px; text-align:center;">Use este botão quando decidir que o preço atual está adequado e não precisa de rebaixa. O item sai da lista de "aguardando análise".</p>` : `<div style="margin-top:8px; text-align:center; padding:10px; background:#F0F7ED; border-radius:8px; color:var(--ok); font-size:13px;">✓ Já analisado em ${fmtData(l.analisado_em)}</div>
+      <button class="btn-s" onclick="reanalisar('${l.id}')" style="margin-top:8px;">🔄 Reanalisar preço</button>
+      <p class="muted" style="margin-top:6px; text-align:center;">Use este botão se quiser revisitar a decisão — o item volta para "aguardando análise".</p>`}
+    ${h.length>1 ? `<details style="margin-top:14px;"><summary style="cursor:pointer; color:var(--mut); font-size:13px;">📊 Histórico de preços (${h.length} aplicações)</summary>
+      <div style="padding:10px 0; font-family:ui-monospace,Menlo,monospace; font-size:12px;">
+        ${h.map((x,i)=>{
+          const isPrimeiro = i===0;
+          const anterior = i>0 ? Number(h[i-1].preco) : null;
+          const p = Number(x.preco);
+          const seta = isPrimeiro ? "início" : (p<anterior ? `↓ rebaixa` : (p>anterior ? `↑ subiu` : `= manteve`));
+          return `<div style="padding:4px 0; border-bottom:1px dashed #eee;"><b>${brl(p)}</b> <span style="opacity:.7">${seta}</span> · ${fmtData(x.criado_em)} · <span style="opacity:.7">${x.aplicado_por_nome||'?'}</span>${Number(x.vendido)?` · vendeu ${Number(x.vendido)}u`:''}</div>`;
+        }).join("")}
+      </div></details>` : ""}
   </div>
 
   <div class="card">
@@ -722,6 +734,17 @@ async function pedirSync(){
     } else erroDB(e);
   }
   loading(false);
+}
+
+async function reanalisar(id){
+  if(!confirm("Voltar este item para 'aguardando análise'?\n\nO histórico de preços continua preservado — só marca que a decisão anterior precisa ser revisitada.")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({analisado_em:null}).eq("id",id);
+    if(error) throw error;
+    alert("Item voltou para 'aguardando análise'.");
+  }catch(e){ erroDB(e); }
+  loading(false); goBack();
 }
 
 async function marcarAnalisado(id){
