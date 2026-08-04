@@ -817,17 +817,19 @@ async function registrarVenda(id){
 
 /* ================= PORTAL DO FORNECEDOR ================= */
 async function criarUsuarioFornecedor(){
-  const idf = parseInt(document.getElementById("fuForn").value);
+  const ids = [...document.querySelectorAll(".fuFornCk:checked")].map(x=>parseInt(x.value));
+  const idf = ids[0];
   const nome = document.getElementById("fuNome").value.trim();
   const pin = document.getElementById("fuPin").value.trim();
-  if(!idf) return alert("Escolha o fornecedor.");
+  if(!ids.length) return alert("Marque pelo menos um fornecedor.");
   if(!nome) return alert("Informe o nome de quem vai acessar.");
   if(!/^\d{6}$/.test(pin)) return alert("PIN precisa ter exatamente 6 dígitos.");
-  if(!confirm(`Criar acesso de fornecedor?\n\nUsuário: ${nome}\nEle verá apenas os produtos e a conta deste fornecedor.`)) return;
+  if(!confirm(`Criar acesso de fornecedor?\n\nUsuário: ${nome}\nCNPJs vinculados: ${ids.length}\nEle verá apenas os produtos e a conta desses fornecedores.`)) return;
   loading(true);
   try{
     const {error} = await sb.from("usuarios").insert({
       nome, papel:"fornecedor", loja:"L01", id_fornecedor:idf,
+      ids_fornecedor: ids.join(","), ativo: true,
       pin_hash: await sha256(pin)
     });
     if(error) throw error;
@@ -840,16 +842,20 @@ async function criarUsuarioFornecedor(){
   loading(false); render();
 }
 
+let fornLojaSel = null;
+function setFornLoja(v){ fornLojaSel = v||null; render(); }
 async function vFornHome(){
-  const idf = sess.id_fornecedor;
-  if(!idf) return `<div class="alertbox a-red">Seu usuário não está vinculado a nenhum fornecedor. Fale com o gestor da rede.</div>`;
-  const {data:pls} = await sb.from("produtos_loja").select("ean,loja").eq("id_fornecedor", idf);
+  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").split(",").map(x=>parseInt(x)).filter(Boolean);
+  if(!idsF.length) return `<div class="alertbox a-red">Seu usuário não está vinculado a nenhum fornecedor. Fale com o gestor da rede.</div>`;
+  const {data:pls} = await sb.from("produtos_loja").select("ean,loja").in("id_fornecedor", idsF);
   const meus = new Set((pls||[]).map(p=>p.ean+"|"+p.loja));
-  const lotes = cache.lotes.filter(l=>meus.has(l.ean+"|"+l.loja) && !l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0)
+  let lotesTodos = cache.lotes.filter(l=>meus.has(l.ean+"|"+l.loja) && !l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0)
     .sort((a,b)=>diasAte(a.validade)-diasAte(b.validade));
+  const lojasComItem = [...new Set(lotesTodos.map(l=>l.loja))].sort();
+  const lotes = fornLojaSel ? lotesTodos.filter(l=>l.loja===fornLojaSel) : lotesTodos;
   const mes = mesAtual(), ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
-  const {data:ress} = await sb.from("ressarcimento_diario").select("valor,preco_vigente").eq("id_fornecedor",idf).gte("data",ini).lt("data",fim);
-  const {data:pags} = await sb.from("pagamentos_fornecedor").select("valor").eq("id_fornecedor",idf).eq("mes_referencia",mes);
+  const {data:ress} = await sb.from("ressarcimento_diario").select("valor,preco_vigente").in("id_fornecedor",idsF).gte("data",ini).lt("data",fim);
+  const {data:pags} = await sb.from("pagamentos_fornecedor").select("valor").in("id_fornecedor",idsF).eq("mes_referencia",mes);
   const ger = (ress||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const pag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const rebaixa = (ress||[]).filter(x=>Number(x.preco_vigente)>0).reduce((a,x)=>a+Number(x.valor||0),0);
@@ -858,7 +864,12 @@ async function vFornHome(){
   return `
   <div class="card">
     <h2>Seus produtos em data crítica</h2>
-    <p class="muted">Produtos seus contados nas lojas Rende Mais que estão próximos do vencimento. Aja rápido: troca, recolhimento ou apoio de venda evitam perda — o que vencer é cobrado ao custo.</p>
+    <p class="muted">Produtos seus contados nas lojas Rende Mais que estão próximos do vencimento. Aja rápido: troca, recolhimento ou apoio de venda evitam perda — o que vencer é cobrado ao custo.${idsF.length>1?` <b>(${idsF.length} CNPJs agrupados)</b>`:''}</p>
+    <label>Loja</label>
+    <div style="display:flex; gap:6px; overflow-x:auto; padding:4px 0;">
+      <button class="chip ${!fornLojaSel?'chip-on':''}" onclick="setFornLoja(null)">Todas <span class="chip-n">${lotesTodos.length}</span></button>
+      ${lojasComItem.map(lj=>`<button class="chip ${fornLojaSel===lj?'chip-on':''}" onclick="setFornLoja('${lj}')">${LOJAS[lj]||lj} <span class="chip-n">${lotesTodos.filter(l=>l.loja===lj).length}</span></button>`).join("")}
+    </div>
   </div>
   <div class="kpis">
     <div class="kpi ${urg.length?'red':''}"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
@@ -866,7 +877,7 @@ async function vFornHome(){
     <div class="kpi red"><div class="v">${brl(ger-pag)}</div><div class="l">Saldo devedor · ${mesLabel(mes)}</div></div>
   </div>
   <div class="card">
-    <h2>Conta do mês — ${mesLabel(mes)}</h2>
+    <h2>Conta do mês — ${mesLabel(mes)}</h2><p class="muted" style="margin-top:-4px;">Consolidada de todas as lojas${idsF.length>1?" e CNPJs":""}.</p>
     <div class="item"><div class="t">Rebaixas de preço</div><div class="num">${brl(rebaixa)}</div></div>
     <div class="item"><div class="t">Perda por vencimento (ao custo)</div><div class="num">${brl(venc)}</div></div>
     <div class="item"><div class="t"><b>Total gerado</b></div><div class="num"><b>${brl(ger)}</b></div></div>
@@ -1076,15 +1087,23 @@ async function vFornec(){
   if(error){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${error.message}</div>`; return; }
   const {data:pags} = await sb.from("pagamentos_fornecedor").select("id_fornecedor,valor").eq("mes_referencia",mes);
 
-  const agg = {};  // id_fornecedor -> {nome, gerado, unidades, pago}
+  const agg = {};  // razão social normalizada -> {nome, ids, gerado, unidades, pago}
+  const chave = n => String(n||"(sem nome)").trim().toUpperCase().replace(/\s+/g," ");
   ress.forEach(r=>{
     if(!r.id_fornecedor) return;
-    const a = agg[r.id_fornecedor] || (agg[r.id_fornecedor]={nome:r.nome_fornecedor||"(sem nome)", gerado:0, unidades:0, pago:0});
+    const k = chave(r.nome_fornecedor);
+    const a = agg[k] || (agg[k]={nome:r.nome_fornecedor||"(sem nome)", ids:new Set(), gerado:0, unidades:0, pago:0});
+    a.ids.add(r.id_fornecedor);
     a.gerado += Number(r.valor)||0; a.unidades += Number(r.qtd_vendida)||0;
   });
-  (pags||[]).forEach(p=>{ if(agg[p.id_fornecedor]) agg[p.id_fornecedor].pago += Number(p.valor)||0; else agg[p.id_fornecedor]={nome:"(sem nome)",gerado:0,unidades:0,pago:Number(p.valor)||0}; });
+  (pags||[]).forEach(p=>{
+    const k = chave(p.nome_fornecedor);
+    const a = agg[k] || (agg[k]={nome:p.nome_fornecedor||"(sem nome)", ids:new Set(), gerado:0, unidades:0, pago:0});
+    if(p.id_fornecedor) a.ids.add(p.id_fornecedor);
+    a.pago += Number(p.valor)||0;
+  });
 
-  const lista = Object.entries(agg).map(([id,a])=>({id:parseInt(id),...a,saldo:a.gerado-a.pago}))
+  const lista = Object.values(agg).map(a=>({...a, idsStr:[...a.ids].join(","), saldo:a.gerado-a.pago}))
     .sort((a,b)=>b.saldo-a.saldo);
   const totGer = lista.reduce((a,x)=>a+x.gerado,0);
   const totPag = lista.reduce((a,x)=>a+x.pago,0);
@@ -1110,9 +1129,9 @@ async function vFornec(){
     const status = f.saldo<=0.01 ? '<span class="badge" style="background:var(--ok)">QUITADO</span>'
                    : (f.pago>0 ? `<span class="badge" style="background:#F57F17">PARCIAL</span>`
                    : `<span class="badge" style="background:var(--danger)">DEVEDOR</span>`);
-    return `<div class="item" onclick="go('fornecdet',{id:${f.id},mes:'${mes}'})" style="cursor:pointer;">
+    return `<div class="item" onclick="go('fornecdet',{ids:'${f.idsStr}',mes:'${mes}'})" style="cursor:pointer;">
       <div style="flex:1;"><div class="t">${f.nome}</div>
-      <div class="s">Gerado ${brl(f.gerado)} · Pago ${brl(f.pago)} · ${Math.round(f.unidades)} un</div></div>
+      <div class="s">Gerado ${brl(f.gerado)} · Pago ${brl(f.pago)} · ${Math.round(f.unidades)} un${f.ids.size>1?` · ${f.ids.size} CNPJs`:''}</div></div>
       <div style="text-align:right;"><div style="font-weight:800; color:${f.saldo>0.01?'var(--danger)':'var(--ok)'}">${brl(f.saldo)}</div>${status}</div>
     </div>`;
   }).join("") : '<p class="muted">Nenhum ressarcimento neste mês.</p>'}
@@ -1120,13 +1139,14 @@ async function vFornec(){
 }
 
 async function vFornecDet(param){
-  const id = param.id, mes = param.mes || mesAtual();
+  const ids = String(param.ids ?? param.id ?? "").split(",").map(x=>parseInt(x)).filter(Boolean);
+  const mes = param.mes || mesAtual();
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
   const {data:ress,error:eR} = await sb.from("ressarcimento_diario")
     .select("*")
-    .eq("id_fornecedor",id).gte("data",ini).lt("data",fim).order("data",{ascending:true});
+    .in("id_fornecedor",ids).gte("data",ini).lt("data",fim).order("data",{ascending:true});
   if(eR){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${eR.message}</div>`; return; }
-  const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").eq("id_fornecedor",id).eq("mes_referencia",mes).order("criado_em");
+  const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").in("id_fornecedor",ids).eq("mes_referencia",mes).order("criado_em");
   // buscar descrições dos produtos separadamente (sem depender de FK no embed)
   const eans = [...new Set((ress||[]).map(r=>r.ean))];
   const descrMap = {};
@@ -1153,7 +1173,7 @@ async function vFornecDet(param){
   document.getElementById("view").innerHTML = `
   <div class="card">
     <h2>${nome}</h2>
-    <p class="muted">${mesLabel(mes)}</p>
+    <p class="muted">${mesLabel(mes)}${ids.length>1?` · ${ids.length} CNPJs agrupados`:''}</p>
     <div class="kpis" style="margin-top:12px;">
       <div class="kpi"><div class="v">${brl(totGer)}</div><div class="l">Total a ressarcir</div></div>
       <div class="kpi"><div class="v">${brl(totPag)}</div><div class="l">Já ressarcido</div></div>
@@ -1166,7 +1186,7 @@ async function vFornecDet(param){
     <p class="muted">Só o gestor pode dar aval de quitação (parcial ou total).</p>
     <label>Valor recebido (R$)</label><input id="pagValor" type="number" step="0.01" placeholder="0,00">
     <label>Descrição / referência (nota, boleto, forma)</label><input id="pagDesc" placeholder="Ex: NC 12345, boleto 07/2026">
-    <button class="btn-p" onclick="registrarPagamento(${id},'${nome.replace(/'/g,'')}', '${mes}')">Registrar recebimento</button>
+    <button class="btn-p" onclick="registrarPagamento(${ids[0]},'${nome.replace(/'/g,'')}', '${mes}')">Registrar recebimento</button>
   </div>
 
   ${pags && pags.length ? `<div class="card">
@@ -1270,8 +1290,10 @@ async function vCadastro(){
   <div class="card">
     <h2>Acesso de fornecedor</h2>
     <p class="muted">Crie um login para o fornecedor acompanhar as validades dos produtos dele. Ele vê apenas os próprios itens: datas, quantidades, preços e a conta do mês (transparência total).</p>
-    <label>Fornecedor</label>
-    <select id="fuForn">${forns.map(f=>`<option value="${f.id}">${f.nome}</option>`).join("")}</select>
+    <label>Fornecedores — marque um ou mais (ex: os dois CNPJs da mesma empresa)</label>
+    <div style="max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:10px; padding:8px; background:#fff;">
+      ${forns.map(f=>`<label style="display:flex; gap:8px; align-items:center; margin:5px 0; font-weight:400; cursor:pointer;"><input type="checkbox" class="fuFornCk" value="${f.id}" style="width:18px; height:18px; margin:0; flex:0 0 auto;">${f.nome} <span class="muted" style="font-size:11px;">#${f.id}</span></label>`).join("")}
+    </div>
     <label>Nome de quem vai acessar</label><input id="fuNome" placeholder="Ex: Carlos — D&D Angeiras">
     <label>PIN (6 dígitos)</label><input id="fuPin" inputmode="numeric" maxlength="6" type="password" placeholder="000000">
     <button class="btn-p" onclick="criarUsuarioFornecedor()">Criar acesso de fornecedor</button>
