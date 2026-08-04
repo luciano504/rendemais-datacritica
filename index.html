@@ -924,13 +924,13 @@ function desenhaPlaca(doc, x, y, w, h, l){
     doc.line(cx-tw/2-2*esc, dy-2.5*esc, cx+tw/2+2*esc, dy-2.5*esc);
     doc.setFontSize(20*esc); doc.setTextColor(31,56,100);
     doc.text("POR", cx, y + h*0.655, {align:"center"});
-    doc.setFontSize(66*esc); doc.setTextColor(198,40,40);
-    doc.text(brl(precoFinal), cx, y + h*0.745, {align:"center"});
+    doc.setFontSize(80*esc); doc.setTextColor(198,40,40);
+    doc.text(brl(precoFinal), cx, y + h*0.755, {align:"center"});
   } else {
     doc.setFontSize(24*esc); doc.setTextColor(31,56,100);
     doc.text("APENAS", cx, y + h*0.615, {align:"center"});
-    doc.setFontSize(66*esc); doc.setTextColor(198,40,40);
-    doc.text(brl(precoFinal), cx, y + h*0.72, {align:"center"});
+    doc.setFontSize(80*esc); doc.setTextColor(198,40,40);
+    doc.text(brl(precoFinal), cx, y + h*0.735, {align:"center"});
   }
   // Box de validade
   const bw = w*0.68, bh = h*0.062, bx = cx-bw/2, by = y + h*0.82;
