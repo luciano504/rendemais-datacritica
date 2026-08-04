@@ -134,6 +134,12 @@ async function carregarUsuarios(){
   if(error) throw error;
   cache.usuarios = data;
 }
+async function carregarSugestoes(){
+  try{
+    const {data} = await sb.from("sugestoes_fornecedor").select("*").eq("status","pendente").order("criado_em");
+    cache.sugestoes = data||[];
+  }catch(e){ cache.sugestoes = []; }
+}
 async function carregarLotes(){
   let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade");
   if(nivel(sess.papel)<3) q = q.eq("loja", sess.loja);
@@ -261,8 +267,8 @@ async function render(){
     else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
     else if(route.page==="placas"){ await carregarLotes(); await histTodos(); v.innerHTML = vPlacas(); }
     else if(route.page==="fornhome"){ await carregarLotes(); await histTodos(); v.innerHTML = await vFornHome(); }
-    else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); v.innerHTML = vGestor(); }
-    else if(route.page==="itemdet"){ await carregarLotes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
+    else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); await carregarSugestoes(); v.innerHTML = vGestor(); }
+    else if(route.page==="itemdet"){ await carregarLotes(); await carregarSugestoes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
@@ -607,6 +613,11 @@ function vGestor(){
     <button class="chip ${!secaoFiltro?'chip-on':''}" onclick="setSecao(null)">Todos <span class="chip-n">${todosLotes.length}</span></button>
     ${secoes.map(([s,n])=>`<button class="chip ${secaoFiltro===s?'chip-on':''}" onclick="setSecao('${s.replace(/'/g,"\\'")}')">${s} <span class="chip-n">${n}</span></button>`).join("")}
   </div>`;
+  const sugs = (cache.sugestoes||[]);
+  const faixaSug = sugs.length ? `
+  <div class="alertbox" style="background:#E3F2FD; color:#1565C0; border:1px solid #90CAF9;">
+    💡 <b>${sugs.length} sugestão(ões) de preço de fornecedores</b> aguardando sua decisão — abra o item para aceitar ou recusar.
+  </div>` : "";
   const faixaAnalise = pendAnalise.length ? `
   <div class="alertbox" style="background:#FFF3CD; color:#8A6D0B; border:1px solid #FFE082; display:flex; justify-content:space-between; align-items:center; gap:10px;">
     <div>🆕 <b>${pendAnalise.length} lote(s) aguardando análise</b> — decidir preço ou manter</div>
@@ -624,6 +635,7 @@ function vGestor(){
     <div class="kpi"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
     <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
   </div>
+  ${faixaSug}
   ${faixaAnalise}
   ${urg.length?`<div class="alertbox a-red">⚠️ <b>${urg.length} item(ns) a 10 dias ou menos do vencimento.</b> Priorize preço/transferência.</div>`:""}
   <div class="row">
@@ -637,9 +649,11 @@ function vGestor(){
   ${ativos.map(l=>{
     const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
     const sec = secaoDo(l);
-    const marca = !l.analisado_em
+    const temSug = (cache.sugestoes||[]).some(s=>s.lote_id===l.id);
+    const marca = (temSug ? `<span class="badge" style="background:#1565C0; font-size:10px; padding:2px 7px; margin-right:6px;">💡 SUGESTÃO</span>` : "")
+      + (!l.analisado_em
       ? `<span class="badge" style="background:#F9A825; font-size:10px; padding:2px 7px; margin-right:6px;">ANALISAR</span>`
-      : "";
+      : "");
     return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
       <div style="flex:1;"><div class="t">${marca}${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
       <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}${sec?' · <span style="opacity:.75">'+sec+'</span>':''}</div></div>
@@ -710,6 +724,17 @@ function vItem(id){
       </div></details>` : ""}
   </div>
 
+  ${(cache.sugestoes||[]).filter(s=>s.lote_id===l.id).map(s=>`
+  <div class="card" style="border:2px solid #1565C0;">
+    <h2>💡 Sugestão do fornecedor</h2>
+    <p style="font-size:15px; margin:6px 0;"><b>${s.nome_fornecedor||"Fornecedor"}</b> sugere rebaixar para
+      <span style="font-size:22px; font-weight:800; color:#1565C0;">${brl(s.preco)}</span></p>
+    <p class="muted">Por ${s.sugerido_por||"?"} em ${fmtData(s.criado_em)}. Nada muda sem a sua decisão.</p>
+    <div class="row">
+      <button class="btn-ok" onclick="aceitarSugestao(${s.id},'${l.id}',${s.preco})">✓ Aceitar e aplicar</button>
+      <button class="btn-s" onclick="recusarSugestao(${s.id})">Recusar</button>
+    </div>
+  </div>`).join("")}
   <div class="card">
     <h2>Ressarcimento do fornecedor — este lote</h2>
     <div class="price-big" style="color:var(--danger);">${brl(ressarcLote(l))}</div>
@@ -748,6 +773,30 @@ async function pedirSync(){
   loading(false);
 }
 
+async function aceitarSugestao(sugId, loteId, preco){
+  const l = cache.lotes.find(x=>x.id===loteId);
+  const custo = (ploja(l.ean,l.loja)||{}).ultimo_custo;
+  if(custo && preco<Number(custo) && !confirm("Preço sugerido está abaixo do custo ("+brl(custo)+"). Aceitar mesmo assim?")) return;
+  if(!confirm(`Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`)) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({preco_atual:preco, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",loteId);
+    if(error) throw error;
+    await sb.from("precos_hist").insert({lote_id:loteId, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (sug. fornecedor)"});
+    await sb.from("sugestoes_fornecedor").update({status:"aceita", respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id",sugId);
+    alert("Sugestão aceita — preço aplicado e item no relatório da equipe de apoio.");
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+async function recusarSugestao(sugId){
+  if(!confirm("Recusar esta sugestão? O fornecedor verá a recusa no portal.")) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("sugestoes_fornecedor").update({status:"recusada", respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id",sugId);
+    if(error) throw error;
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
 async function reanalisar(id){
   if(!confirm("Voltar este item para 'aguardando análise'?\n\nO histórico de preços continua preservado — só marca que a decisão anterior precisa ser revisitada.")) return;
   loading(true);
@@ -843,28 +892,58 @@ async function criarUsuarioFornecedor(){
 }
 
 let fornLojaSel = null;
+let fornMes = null;
 function setFornLoja(v){ fornLojaSel = v||null; render(); }
+function setFornMes(m){ fornMes = m; render(); }
 async function vFornHome(){
   const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").split(",").map(x=>parseInt(x)).filter(Boolean);
   if(!idsF.length) return `<div class="alertbox a-red">Seu usuário não está vinculado a nenhum fornecedor. Fale com o gestor da rede.</div>`;
-  const {data:pls} = await sb.from("produtos_loja").select("ean,loja").in("id_fornecedor", idsF);
-  const meus = new Set((pls||[]).map(p=>p.ean+"|"+p.loja));
-  let lotesTodos = cache.lotes.filter(l=>meus.has(l.ean+"|"+l.loja) && !l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0)
+  // Produtos do fornecedor por EAN: se ele fornece o produto em qualquer loja, vê os lotes em TODAS as lojas
+  const {data:pls} = await sb.from("produtos_loja").select("ean,nome_fornecedor").in("id_fornecedor", idsF);
+  const meusEans = new Set((pls||[]).map(p=>p.ean));
+  const nomeForn = ((pls||[]).find(p=>p.nome_fornecedor)||{}).nome_fornecedor || "Fornecedor";
+  let lotesTodos = cache.lotes.filter(l=>meusEans.has(l.ean) && !l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0)
     .sort((a,b)=>diasAte(a.validade)-diasAte(b.validade));
   const lojasComItem = [...new Set(lotesTodos.map(l=>l.loja))].sort();
   const lotes = fornLojaSel ? lotesTodos.filter(l=>l.loja===fornLojaSel) : lotesTodos;
-  const mes = mesAtual(), ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
-  const {data:ress} = await sb.from("ressarcimento_diario").select("valor,preco_vigente").in("id_fornecedor",idsF).gte("data",ini).lt("data",fim);
-  const {data:pags} = await sb.from("pagamentos_fornecedor").select("valor").in("id_fornecedor",idsF).eq("mes_referencia",mes);
+  // Sugestões pendentes/respondidas deste fornecedor (últimos 30 dias)
+  let sugsMap = {};
+  try{
+    const corte = new Date(Date.now()-30*24*3600*1000).toISOString();
+    const {data:sugs} = await sb.from("sugestoes_fornecedor").select("*").in("id_fornecedor",idsF).gte("criado_em",corte).order("criado_em",{ascending:false});
+    (sugs||[]).forEach(s=>{ if(!sugsMap[s.lote_id]) sugsMap[s.lote_id]=s; });
+  }catch(e){}
+  // Conta do mês (com navegação)
+  const mes = fornMes || mesAtual();
+  const eAtual = mes===mesAtual();
+  const anterior = mesPrev(mes), proximo = mesPrev(mes,-1);
+  const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+  const {data:ress} = await sb.from("ressarcimento_diario").select("*").in("id_fornecedor",idsF).gte("data",ini).lt("data",fim).order("data");
+  const {data:pags} = await sb.from("pagamentos_fornecedor").select("valor,criado_em,descricao").in("id_fornecedor",idsF).eq("mes_referencia",mes).order("criado_em");
   const ger = (ress||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const pag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const rebaixa = (ress||[]).filter(x=>Number(x.preco_vigente)>0).reduce((a,x)=>a+Number(x.valor||0),0);
   const venc = ger - rebaixa;
+  // detalhamento por item (ean+loja+tipo)
+  const eansRess = [...new Set((ress||[]).map(r=>r.ean))];
+  const descrMap = {};
+  if(eansRess.length){
+    const {data:prods} = await sb.from("produtos").select("ean,descricao").in("ean",eansRess);
+    (prods||[]).forEach(p=>{ descrMap[p.ean]=p.descricao; });
+  }
+  const grupos = {};
+  (ress||[]).forEach(r=>{
+    const tipo = Number(r.preco_vigente)===0 ? "Vencimento" : "Rebaixa";
+    const k = r.ean+"|"+r.loja+"|"+tipo;
+    const g = grupos[k] || (grupos[k]={ean:r.ean, loja:r.loja, tipo, unidades:0, valor:0});
+    g.unidades += Number(r.qtd_vendida)||0; g.valor += Number(r.valor)||0;
+  });
+  const itens = Object.values(grupos).sort((a,b)=>b.valor-a.valor);
   const urg = lotes.filter(l=>diasAte(l.validade)<=10);
   return `
   <div class="card">
     <h2>Seus produtos em data crítica</h2>
-    <p class="muted">Produtos seus contados nas lojas Rende Mais que estão próximos do vencimento. Aja rápido: troca, recolhimento ou apoio de venda evitam perda — o que vencer é cobrado ao custo.${idsF.length>1?` <b>(${idsF.length} CNPJs agrupados)</b>`:''}</p>
+    <p class="muted">${nomeForn}${idsF.length>1?` <b>(${idsF.length} CNPJs agrupados)</b>`:''} — produtos seus próximos do vencimento nas lojas Rende Mais. Aja rápido: o que vencer é cobrado ao custo. Você pode <b>sugerir um preço de rebaixa</b> em cada item; o gestor da rede decide.</p>
     <label>Loja</label>
     <div style="display:flex; gap:6px; overflow-x:auto; padding:4px 0;">
       <button class="chip ${!fornLojaSel?'chip-on':''}" onclick="setFornLoja(null)">Todas <span class="chip-n">${lotesTodos.length}</span></button>
@@ -876,26 +955,78 @@ async function vFornHome(){
     <div class="kpi"><div class="v">${lotes.length}</div><div class="l">Lotes ativos</div></div>
     <div class="kpi red"><div class="v">${brl(ger-pag)}</div><div class="l">Saldo devedor · ${mesLabel(mes)}</div></div>
   </div>
+  <h3 class="sec">Lotes em acompanhamento — vencimento mais próximo primeiro</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${lotes.length? lotes.map(l=>{
+    const d=diasAte(l.validade), b=bucket(d), pn=precoNormal(l);
+    const promo = l.preco_atual && pn && Number(l.preco_atual)<pn;
+    const sug = sugsMap[l.id];
+    let sugHtml = "";
+    if(sug){
+      if(sug.status==="pendente") sugHtml = `<div class="s" style="color:#1565C0;">💡 Você sugeriu ${brl(sug.preco)} — aguardando o gestor</div>`;
+      else if(sug.status==="aceita") sugHtml = `<div class="s" style="color:var(--ok);">✓ Sugestão de ${brl(sug.preco)} aceita</div>`;
+      else if(sug.status==="recusada") sugHtml = `<div class="s" style="color:var(--danger);">✗ Sugestão de ${brl(sug.preco)} recusada — pode sugerir outro valor</div>`;
+    }
+    const podeSugerir = !sug || sug.status==="recusada";
+    return `<div class="item" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
+      <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · vence ${fmtData(l.validade)}${promo?` · de ${brl(pn)} por <b>${brl(l.preco_atual)}</b>`:` · preço ${brl(l.preco_atual||pn||0)}`}</div>
+      ${sugHtml}</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        ${podeSugerir?`<button class="btn-s btn-sm" style="flex:0 0 auto; margin:0; padding:8px 12px;" onclick="sugerirPreco('${l.id}','${nomeForn.replace(/'/g,"")}',${idsF[0]})">💡 Sugerir preço</button>`:""}
+        <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
+      </div>
+    </div>`;
+  }).join("") : '<p class="muted">Nenhum produto seu em data crítica no momento. 🎉</p>'}
+  </div>
   <div class="card">
-    <h2>Conta do mês — ${mesLabel(mes)}</h2><p class="muted" style="margin-top:-4px;">Consolidada de todas as lojas${idsF.length>1?" e CNPJs":""}.</p>
+    <h2>Conta — ${mesLabel(mes)}</h2>
+    <p class="muted" style="margin-top:-4px;">Consolidada de todas as lojas${idsF.length>1?" e CNPJs":""}.</p>
+    <div class="row" style="margin:10px 0;">
+      <button class="btn-s btn-sm" style="flex:1; margin:0; padding:9px;" onclick="setFornMes('${anterior}')">‹ ${mesLabel(anterior)}</button>
+      ${eAtual?'<div style="flex:1; text-align:center; padding:9px; font-weight:700; color:var(--navy);">Mês atual</div>'
+        :`<button class="btn-s btn-sm" style="flex:1; margin:0; padding:9px;" onclick="setFornMes(null)">Mês atual ›</button>`}
+    </div>
     <div class="item"><div class="t">Rebaixas de preço</div><div class="num">${brl(rebaixa)}</div></div>
     <div class="item"><div class="t">Perda por vencimento (ao custo)</div><div class="num">${brl(venc)}</div></div>
     <div class="item"><div class="t"><b>Total gerado</b></div><div class="num"><b>${brl(ger)}</b></div></div>
     <div class="item"><div class="t">Já ressarcido</div><div class="num" style="color:var(--ok)">${brl(pag)}</div></div>
     <div class="item"><div class="t"><b>Saldo devedor</b></div><div class="num" style="color:${ger-pag>0.01?'var(--danger)':'var(--ok)'}"><b>${brl(ger-pag)}</b></div></div>
   </div>
-  <h3 class="sec">Lotes em acompanhamento — vencimento mais próximo primeiro</h3>
+  ${itens.length? `<h3 class="sec">Detalhamento de ${mesLabel(mes)} — item por item</h3>
   <div class="card" style="padding:6px 16px;">
-  ${lotes.length? lotes.map(l=>{
-    const d=diasAte(l.validade), b=bucket(d), pn=precoNormal(l);
-    const promo = l.preco_atual && pn && Number(l.preco_atual)<pn;
-    return `<div class="item">
-      <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
-      <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · vence ${fmtData(l.validade)}${promo?` · de ${brl(pn)} por <b>${brl(l.preco_atual)}</b>`:''}</div></div>
-      <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
-    </div>`;
-  }).join("") : '<p class="muted">Nenhum produto seu em data crítica no momento. 🎉</p>'}
-  </div>`;
+  ${itens.map(i=>`<div class="item">
+    <div style="flex:1;"><div class="t">${badgeLoja(i.loja)}${descrMap[i.ean]||i.ean}</div>
+    <div class="s">${LOJAS[i.loja]||i.loja} · ${Math.round(i.unidades)} un</div></div>
+    <div style="text-align:right;"><div class="num" style="color:var(--danger)">${brl(i.valor)}</div>
+    <span class="badge" style="background:${i.tipo==='Vencimento'?'#7B1FA2':'#1976D2'}; font-size:10px;">${i.tipo}</span></div>
+  </div>`).join("")}
+  </div>`:""}
+  ${(pags||[]).length? `<div class="card">
+    <h2>Ressarcimentos registrados em ${mesLabel(mes)}</h2>
+    ${pags.map(p=>`<div class="item"><div><div class="t">${brl(p.valor)}</div><div class="s">${fmtData(p.criado_em)}${p.descricao?' · '+p.descricao:''}</div></div></div>`).join("")}
+  </div>`:""}`;
+}
+async function sugerirPreco(loteId, nomeForn, idf){
+  const l = cache.lotes.find(x=>x.id===loteId);
+  const pn = precoNormal(l);
+  const v = prompt(`Sugerir preço de rebaixa para:\n${(l.produtos&&l.produtos.descricao)||l.ean}\n\nPreço atual: ${brl(l.preco_atual||pn||0)}\n\nDigite o preço sugerido (ex: 4,99):`);
+  if(v===null) return;
+  const preco = parseFloat(String(v).replace(",","."));
+  if(!(preco>0)) return alert("Valor inválido.");
+  loading(true);
+  try{
+    const {error} = await sb.from("sugestoes_fornecedor").insert({
+      lote_id: loteId, id_fornecedor: idf, nome_fornecedor: nomeForn,
+      sugerido_por: sess.nome, preco: preco
+    });
+    if(error) throw error;
+    alert(`Sugestão de ${brl(preco)} enviada ao gestor. Você acompanha o status aqui no portal.`);
+  }catch(e){
+    if(String(e.message||"").includes("sugestoes_fornecedor")) alert("O quadro de sugestões ainda não foi ativado no banco. O gestor precisa rodar o SQL de setup.");
+    else erroDB(e);
+  }
+  loading(false); render();
 }
 
 /* ================= PLACAS (impressão) ================= */
