@@ -908,7 +908,7 @@ function desenhaPlaca(doc, x, y, w, h, l){
   // Nome do produto
   doc.setTextColor(31,56,100);
   doc.setFont("helvetica","bold");
-  let fs = 32*esc, linhas;
+  let fs = 40*esc, linhas;
   do{ doc.setFontSize(fs); linhas = doc.splitTextToSize(nome, w*0.80); fs -= 2; } while(linhas.length>3 && fs>14*esc);
   const lh = (fs+2)*0.42*esc + fs*0.11;
   let ny = y + h*0.385;
