@@ -142,7 +142,7 @@ async function carregarSugestoes(){
 }
 async function carregarLotes(){
   let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade");
-  if(nivel(sess.papel)<3) q = q.eq("loja", sess.loja);
+  if(nivel(sess.papel)<3 && sess.papel!=="fornecedor") q = q.eq("loja", sess.loja);
   const {data,error} = await q;
   if(error) throw error;
   cache.lotes = data;
