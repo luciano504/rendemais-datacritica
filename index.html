@@ -134,6 +134,12 @@ async function carregarUsuarios(){
   if(error) throw error;
   cache.usuarios = data;
 }
+async function carregarEansForn(){
+  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").split(",").map(x=>parseInt(x)).filter(Boolean);
+  if(!idsF.length){ cache.eansForn = new Set(); return; }
+  const {data} = await sb.from("produtos_loja").select("ean").in("id_fornecedor", idsF);
+  cache.eansForn = new Set((data||[]).map(p=>p.ean));
+}
 async function carregarSugestoes(){
   try{
     const {data} = await sb.from("sugestoes_fornecedor").select("*").eq("status","pendente").order("criado_em");
@@ -225,7 +231,7 @@ function renderNav(){
   n.classList.remove("hidden");
   if(sess && sess.papel==="fornecedor"){
     const nav=document.getElementById("nav");
-    nav.innerHTML = [["fornhome","📦","Meus produtos"],["sair","⏻","Sair"]].map(t=>
+    nav.innerHTML = [["fornhome","📦","Meus produtos"],["placas","🖨","Placas"],["sair","⏻","Sair"]].map(t=>
       `<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span>${t[1]}</span>${t[2]}</button>`).join("");
     return;
   }
@@ -251,21 +257,21 @@ async function render(){
       v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é exclusiva do gestor.</div>';
       return;
     }
-    if(rotasPrev.includes(route.page) && nivel(sess.papel)<2){
+    if(rotasPrev.includes(route.page) && nivel(sess.papel)<2 && sess.papel!=="fornecedor"){
       v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é para Prevenção de perdas ou Gestor.</div>';
       return;
     }
   } else if(route.page!=="login"){
     route={page:"login",param:null,prev:[]}; renderNav();
   }
-  if(sess && sess.papel==="fornecedor" && route.page!=="fornhome"){
+  if(sess && sess.papel==="fornecedor" && !["fornhome","placas"].includes(route.page)){
     route={page:"fornhome",param:null,prev:[]}; renderNav();
   }
   try{
     if(route.page==="login"){ await carregarUsuarios(); v.innerHTML = vLogin(); }
     else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
     else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
-    else if(route.page==="placas"){ await carregarLotes(); await histTodos(); v.innerHTML = vPlacas(); }
+    else if(route.page==="placas"){ await carregarLotes(); await histTodos(); if(sess.papel==="fornecedor") await carregarEansForn(); v.innerHTML = vPlacas(); }
     else if(route.page==="fornhome"){ await carregarLotes(); await histTodos(); v.innerHTML = await vFornHome(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); await carregarSugestoes(); v.innerHTML = vGestor(); }
     else if(route.page==="itemdet"){ await carregarLotes(); await carregarSugestoes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
@@ -1037,7 +1043,8 @@ let placaTam = "A6";
 
 function lotesPlacas(){
   let ls = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0);
-  const lojaFix = sess.papel==="gestor" ? placaFiltro.loja : sess.loja;
+  if(sess.papel==="fornecedor") ls = ls.filter(l=>cache.eansForn && cache.eansForn.has(l.ean));
+  const lojaFix = (sess.papel==="gestor"||sess.papel==="fornecedor") ? placaFiltro.loja : sess.loja;
   if(lojaFix) ls = ls.filter(l=>l.loja===lojaFix);
   if(placaFiltro.secao) ls = ls.filter(l=>(secaoDo(l)||"(sem seção)")===placaFiltro.secao);
   if(placaFiltro.estado==="vigente"){
@@ -1057,9 +1064,10 @@ function vPlacas(){
   const nSel = idsVisiveis.filter(id=>placasSel.has(id)).length;
   const contSec = {};
   cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0)
+    .filter(l=>sess.papel!=="fornecedor" || (cache.eansForn && cache.eansForn.has(l.ean)))
     .forEach(l=>{ const s=secaoDo(l)||"(sem seção)"; contSec[s]=(contSec[s]||0)+1; });
   const secoes = Object.keys(contSec).sort();
-  const gestor = sess.papel==="gestor";
+  const gestor = sess.papel==="gestor" || sess.papel==="fornecedor";
   return `
   <div class="card">
     <h2>🖨 Placas de data crítica</h2>
