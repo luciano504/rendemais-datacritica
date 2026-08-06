@@ -380,7 +380,7 @@ function vContagem(){
     ${meus.length? meus.map(l=>{
       const d=diasAte(l.validade), b=bucket(d);
       return `<div class="item"><div><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div><div class="s">${Number(l.qtd_inicial)} un · vence ${fmtData(l.validade)} · por ${l.criado_por_nome||""}</div></div>
-      <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span></div>`;
+      <span class="badge" style="background:${b.cor}">${d<0?"VENC.":(d===0?"HOJE":d+"d")}</span></div>`;
     }).join(""):'<p class="muted">Nenhuma contagem hoje.</p>'}
   </div>`;
 }
@@ -530,17 +530,29 @@ async function salvarContagem(){
 
 /* ================= CALENDÁRIO (PREVENÇÃO) ================= */
 function vCalendario(){
-  const zerados = cache.lotes.filter(l=>(l.zerado || diasAte(l.validade)<0) && !l.resolvido);
+  const pendVenc = cache.lotes.filter(l=>diasAte(l.validade)<0 && !l.resolvido && Number(l.qtd_restante)>0);
+  const zerados = cache.lotes.filter(l=>(l.zerado || (diasAte(l.validade)<0 && Number(l.qtd_restante)<=0)) && !l.resolvido);
   const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0 && diasAte(l.validade)<=60);
   const grupos={};
   ativos.forEach(l=>{ (grupos[l.validade]=grupos[l.validade]||[]).push(l); });
-  let html = zerados.map(l=>{
+  let html = pendVenc.map(l=>{
+    const pl = ploja(l.ean,l.loja)||{};
+    const custo = Number(pl.ultimo_custo)||0;
+    return `<div class="alertbox" style="background:#FDECEA; border:1px solid #F5C6CB; color:#7A1E1E;">
+      🗑 <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) <b>venceu em ${fmtData(l.validade)}</b> — ${Number(l.qtd_restante)} un na contagem.
+      <div style="margin-top:10px;">
+        <label>Quantidade realmente descartada</label>
+        <input id="dq_${l.id}" type="number" inputmode="decimal" step="1" min="0" value="${Number(l.qtd_restante)}" style="margin-bottom:8px;">
+        <label>Fotos do descarte — até 3 (câmera ou galeria)</label>
+        <input id="df_${l.id}" type="file" accept="image/*" multiple capture="environment" style="margin-bottom:8px;">
+        <button class="btn-p" style="margin-top:4px;" onclick="confirmarDescarte('${l.id}')">✓ Confirmar descarte e lançar ao fornecedor</button>
+        <p class="muted" style="margin-top:6px;">Validação da Prevenção: a quantidade confirmada × custo (${custo?brl(custo):'custo pendente'}) vira dívida de ${pl.nome_fornecedor||'(fornecedor não identificado)'}. As fotos ficam no arquivo do fornecedor como comprovante.</p>
+      </div></div>`;
+  }).join("") + zerados.map(l=>{
     const pn = precoNormal(l);
-    const venceu = diasAte(l.validade)<0;
-    const motivo = l.zerado ? "zerou a contagem crítica" : "passou da validade";
-    return `<div class="alertbox a-green">${venceu?'⚠️':'✅'} <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) ${motivo}.
-      ${pn?`Voltar ao preço normal de <b>${brl(pn)}</b>${venceu?' e retirar sobras.':'.'}`:''}
-      <button class="btn-ok btn-sm" onclick="resolver('${l.id}')">${venceu?'Retirado / normalizado':'Preço normalizado'}</button></div>`;
+    return `<div class="alertbox a-green">✅ <b>${l.produtos?l.produtos.descricao:l.ean}</b> (${LOJAS[l.loja]}) zerou a contagem crítica.
+      ${pn?`Voltar ao preço normal de <b>${brl(pn)}</b>.`:''}
+      <button class="btn-ok btn-sm" onclick="resolver('${l.id}')">Preço normalizado</button></div>`;
   }).join("");
   if(!Object.keys(grupos).length && !zerados.length) html+='<div class="card"><p class="muted">Nenhum item com data crítica nos próximos 60 dias.</p></div>';
   for(const [data,ls] of Object.entries(grupos)){
@@ -619,6 +631,11 @@ function vGestor(){
     <button class="chip ${!secaoFiltro?'chip-on':''}" onclick="setSecao(null)">Todos <span class="chip-n">${todosLotes.length}</span></button>
     ${secoes.map(([s,n])=>`<button class="chip ${secaoFiltro===s?'chip-on':''}" onclick="setSecao('${s.replace(/'/g,"\\'")}')">${s} <span class="chip-n">${n}</span></button>`).join("")}
   </div>`;
+  const vencAguard = cache.lotes.filter(l=>diasAte(l.validade)<0 && !l.resolvido && Number(l.qtd_restante)>0).length;
+  const faixaVenc = vencAguard ? `
+  <div class="alertbox" style="background:#FDECEA; color:#7A1E1E; border:1px solid #F5C6CB;">
+    🗑 <b>${vencAguard} lote(s) vencido(s)</b> aguardando validação de descarte pela Prevenção (no Calendário).
+  </div>` : "";
   const sugs = (cache.sugestoes||[]);
   const faixaSug = sugs.length ? `
   <div class="alertbox" style="background:#E3F2FD; color:#1565C0; border:1px solid #90CAF9;">
@@ -641,6 +658,7 @@ function vGestor(){
     <div class="kpi"><div class="v">${urg.length}</div><div class="l">Itens ≤ 10 dias</div></div>
     <div class="kpi"><div class="v">${ativos.length}</div><div class="l">Lotes ativos</div></div>
   </div>
+  ${faixaVenc}
   ${faixaSug}
   ${faixaAnalise}
   ${urg.length?`<div class="alertbox a-red">⚠️ <b>${urg.length} item(ns) a 10 dias ou menos do vencimento.</b> Priorize preço/transferência.</div>`:""}
@@ -663,7 +681,7 @@ function vGestor(){
     return `<div class="item" onclick="go('itemdet','${l.id}')" style="cursor:pointer;">
       <div style="flex:1;"><div class="t">${marca}${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
       <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · risco <b>${brl(custoRisco(l))}</b>${r>0?' · ressarc. '+brl(r):''}${sec?' · <span style="opacity:.75">'+sec+'</span>':''}</div></div>
-      <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
+      <span class="badge" style="background:${b.cor}">${d<0?"VENC.":(d===0?"HOJE":d+"d")}</span>
     </div>`;
   }).join("") || (apenasAnalisar?'<p class="muted">Nenhum lote aguardando análise 🎉</p>':'<p class="muted">Nenhum lote nessa seção.</p>')}
   </div>`;
@@ -870,6 +888,70 @@ async function registrarVenda(id){
 }
 
 
+/* ================= VALIDAÇÃO DE DESCARTE (Prevenção) ================= */
+function comprimirImagem(file, maxDim=1280, qualidade=0.72){
+  return new Promise((res, rej)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      let w=img.width, h=img.height;
+      if(w>maxDim||h>maxDim){ const f=maxDim/Math.max(w,h); w=Math.round(w*f); h=Math.round(h*f); }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      cv.toBlob(b=>b?res(b):rej(new Error("falha ao comprimir")), "image/jpeg", qualidade);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = ()=>rej(new Error("imagem inválida"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function confirmarDescarte(loteId){
+  const l = cache.lotes.find(x=>x.id===loteId);
+  if(!l) return;
+  const qtd = parseFloat(document.getElementById("dq_"+loteId).value);
+  if(isNaN(qtd) || qtd<0) return alert("Quantidade inválida.");
+  const files = [...(document.getElementById("df_"+loteId).files||[])];
+  if(files.length>3) return alert("No máximo 3 fotos por lote.");
+  const pl = ploja(l.ean,l.loja)||{};
+  const custo = Number(pl.ultimo_custo)||0;
+  const valor = qtd*custo;
+  if(!confirm(`Confirmar descarte?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nContado: ${Number(l.qtd_restante)} un · Validado: ${qtd} un\nFotos: ${files.length}\n${qtd>0&&custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Sem lançamento (qtd zero ou custo indisponível)"}`)) return;
+  loading(true);
+  try{
+    const fotos = [];
+    for(let i=0;i<files.length;i++){
+      const blob = await comprimirImagem(files[i]);
+      const path = `${loteId}/${Date.now()}_${i}.jpg`;
+      const {error:eU} = await sb.storage.from("descartes").upload(path, blob, {contentType:"image/jpeg", upsert:true});
+      if(eU) throw new Error("Upload da foto "+(i+1)+": "+eU.message);
+      fotos.push(sb.storage.from("descartes").getPublicUrl(path).data.publicUrl);
+    }
+    const {error:eD} = await sb.from("descartes").upsert({
+      lote_id: loteId, qtd_contada: Number(l.qtd_restante), qtd_validada: qtd,
+      fotos, status: "validado", validado_por: sess.nome,
+      validado_em: new Date().toISOString()
+    }, {onConflict:"lote_id"});
+    if(eD) throw eD;
+    if(qtd>0 && custo>0){
+      const {error:eR} = await sb.from("ressarcimento_diario").upsert({
+        lote_id: loteId, ean: l.ean, loja: l.loja,
+        id_fornecedor: pl.id_fornecedor, nome_fornecedor: pl.nome_fornecedor,
+        data: String(l.validade).slice(0,10),
+        qtd_vendida: qtd, preco_normal: custo, preco_vigente: 0,
+        valor: Math.round(valor*100)/100
+      }, {onConflict:"lote_id,data"});
+      if(eR) throw eR;
+    }
+    const {error:eL} = await sb.from("lotes").update({resolvido:true}).eq("id",loteId);
+    if(eL) throw eL;
+    alert("Descarte validado"+(qtd>0&&custo>0?` — ${brl(valor)} lançado ao fornecedor`:"")+". Comprovante arquivado.");
+  }catch(e){
+    if(String(e.message||"").includes("descartes")) alert("O quadro de descartes ainda não foi ativado no banco. Rode o SQL de setup.");
+    else erroDB(e);
+  }
+  loading(false); render();
+}
+
 /* ================= PORTAL DO FORNECEDOR ================= */
 async function criarUsuarioFornecedor(){
   const ids = [...document.querySelectorAll(".fuFornCk:checked")].map(x=>parseInt(x.value));
@@ -926,6 +1008,12 @@ async function vFornHome(){
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
   const {data:ress} = await sb.from("ressarcimento_diario").select("*").in("id_fornecedor",idsF).gte("data",ini).lt("data",fim).order("data");
   const {data:pags} = await sb.from("pagamentos_fornecedor").select("valor,criado_em,descricao").in("id_fornecedor",idsF).eq("mes_referencia",mes).order("criado_em");
+  const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
+  let descartesV = [];
+  if(lotesVencIds.length){
+    try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+  }
+  const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
   const ger = (ress||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const pag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const rebaixa = (ress||[]).filter(x=>Number(x.preco_vigente)>0).reduce((a,x)=>a+Number(x.valor||0),0);
@@ -980,7 +1068,7 @@ async function vFornHome(){
       ${sugHtml}</div>
       <div style="display:flex; align-items:center; gap:8px;">
         ${podeSugerir?`<button class="btn-s btn-sm" style="flex:0 0 auto; margin:0; padding:8px 12px;" onclick="sugerirPreco('${l.id}','${nomeForn.replace(/'/g,"")}',${idsF[0]})">💡 Sugerir preço</button>`:""}
-        <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
+        <span class="badge" style="background:${b.cor}">${d<0?"VENC.":(d===0?"HOJE":d+"d")}</span>
       </div>
     </div>`;
   }).join("") : '<p class="muted">Nenhum produto seu em data crítica no momento. 🎉</p>'}
@@ -1007,6 +1095,18 @@ async function vFornHome(){
     <div style="text-align:right;"><div class="num" style="color:var(--danger)">${brl(i.valor)}</div>
     <span class="badge" style="background:${i.tipo==='Vencimento'?'#7B1FA2':'#1976D2'}; font-size:10px;">${i.tipo}</span></div>
   </div>`).join("")}
+  </div>`:""}
+  ${descartesV.length? `<h3 class="sec">🗑 Comprovantes de descarte — ${mesLabel(mes)}</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${descartesV.map(d=>{
+    const r = ressPorLote[d.lote_id]||{};
+    const fotos = Array.isArray(d.fotos)? d.fotos : [];
+    return `<div class="item" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;"><div class="t">${badgeLoja(r.loja||"")}${descrMap[r.ean]||r.ean||"Produto"}</div>
+      <div class="s">${LOJAS[r.loja]||""} · venceu ${r.data?fmtData(r.data):""} · <b>${Number(d.qtd_validada)} un</b> descartadas (contagem: ${Number(d.qtd_contada)}) · validado por ${d.validado_por||"?"}</div>
+      ${fotos.length? `<div style="display:flex; gap:6px; margin-top:6px;">${fotos.map(u=>`<a href="${u}" target="_blank" rel="noopener"><img src="${u}" style="width:76px; height:76px; object-fit:cover; border-radius:8px; border:1px solid var(--line);"></a>`).join("")}</div>` : `<div class="s muted">sem fotos</div>`}</div>
+    </div>`;
+  }).join("")}
   </div>`:""}
   ${(pags||[]).length? `<div class="card">
     <h2>Ressarcimentos registrados em ${mesLabel(mes)}</h2>
@@ -1053,6 +1153,9 @@ function lotesPlacas(){
     const corte = Date.now() - 48*3600*1000;
     ls = ls.filter(l=>{ const h=cache.hist[l.id]||[]; if(!h.length) return false;
       return new Date(h[h.length-1].criado_em).getTime() >= corte; });
+  } else if(placaFiltro.estado==="sugeridos"){
+    ls = ls.filter(l=>{ const h=cache.hist[l.id]||[]; if(!h.length) return false;
+      return String(h[h.length-1].aplicado_por_nome||"").includes("sug. fornecedor"); });
   }
   return ls.sort((a,b)=>{ const da=diasAte(a.validade), db=diasAte(b.validade);
     return da!==db ? da-db : Number(b.qtd_restante)-Number(a.qtd_restante); });
@@ -1087,6 +1190,7 @@ function vPlacas(){
       <button class="chip ${placaFiltro.estado==='todos'?'chip-on':''}" onclick="setPlacaFiltro('estado','todos')">Todos</button>
       <button class="chip ${placaFiltro.estado==='vigente'?'chip-on':''}" onclick="setPlacaFiltro('estado','vigente')">Rebaixa vigente</button>
       <button class="chip ${placaFiltro.estado==='alterados'?'chip-on':''}" onclick="setPlacaFiltro('estado','alterados')">Alterados (48h)</button>
+      <button class="chip ${placaFiltro.estado==='sugeridos'?'chip-on':''}" onclick="setPlacaFiltro('estado','sugeridos')">💡 Sugeridos por fornecedor</button>
     </div>
     <label>Tamanho da placa</label>
     <div style="display:flex; gap:6px; margin-top:4px; flex-wrap:wrap;">
@@ -1112,7 +1216,7 @@ function vPlacas(){
           <div style="flex:1;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
           <div class="s">${promo?`de ${brl(pn)} por <b>${brl(l.preco_atual)}</b>`:`preço ${brl(l.preco_atual||pn||0)}`} · vence ${fmtData(l.validade)}</div></div>
         </label>
-        <span class="badge" style="background:${b.cor}">${d<=0?"HOJE":d+"d"}</span>
+        <span class="badge" style="background:${b.cor}">${d<0?"VENC.":(d===0?"HOJE":d+"d")}</span>
       </div>`;
     }).join("") || '<p class="muted">Nenhum item com esses filtros.</p>'}
   </div>`;
@@ -1286,6 +1390,12 @@ async function vFornecDet(param){
     .in("id_fornecedor",ids).gte("data",ini).lt("data",fim).order("data",{ascending:true});
   if(eR){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${eR.message}</div>`; return; }
   const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").in("id_fornecedor",ids).eq("mes_referencia",mes).order("criado_em");
+  const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
+  let descartesV = [];
+  if(lotesVencIds.length){
+    try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+  }
+  const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
   // buscar descrições dos produtos separadamente (sem depender de FK no embed)
   const eans = [...new Set((ress||[]).map(r=>r.ean))];
   const descrMap = {};
@@ -1320,6 +1430,18 @@ async function vFornecDet(param){
     </div>
   </div>
 
+  ${descartesV.length? `<h3 class="sec">🗑 Comprovantes de descarte</h3>
+  <div class="card" style="padding:6px 16px;">
+  ${descartesV.map(d=>{
+    const r = ressPorLote[d.lote_id]||{};
+    const fotos = Array.isArray(d.fotos)? d.fotos : [];
+    return `<div class="item" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;"><div class="t">${badgeLoja(r.loja||"")}${descrMap[r.ean]||r.ean||"Produto"}</div>
+      <div class="s">${LOJAS[r.loja]||""} · venceu ${r.data?fmtData(r.data):""} · <b>${Number(d.qtd_validada)} un</b> descartadas (contagem: ${Number(d.qtd_contada)}) · validado por ${d.validado_por||"?"}</div>
+      ${fotos.length? `<div style="display:flex; gap:6px; margin-top:6px;">${fotos.map(u=>`<a href="${u}" target="_blank" rel="noopener"><img src="${u}" style="width:76px; height:76px; object-fit:cover; border-radius:8px; border:1px solid var(--line);"></a>`).join("")}</div>` : `<div class="s muted">sem fotos</div>`}</div>
+    </div>`;
+  }).join("")}
+  </div>`:""}
   <div class="card">
     <h2>Registrar recebimento</h2>
     <p class="muted">Só o gestor pode dar aval de quitação (parcial ou total).</p>
