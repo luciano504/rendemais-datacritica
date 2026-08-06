@@ -97,8 +97,8 @@ const SUPABASE_URL = "https://estciwkeihmokvlnvaum.supabase.co";
 const SUPABASE_KEY = "sb_publishable_l14fjxQmWUeu5OXlZJ35GA_-X3ESkgZ";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const LOJAS = {L01:"L01 Veneza",L02:"L02 Máximo",L03:"L03 Royal",L05:"L05 Alvorada",L08:"L08 Tradição",L09:"L09 Massangana"};
-const LOJA_COR = {L01:"#1976D2", L02:"#388E3C", L03:"#C2185B", L05:"#F57C00", L08:"#7B1FA2", L09:"#00838F"};
+const LOJAS = {L01:"L01 Veneza",L02:"L02 Máximo",L03:"L03 Royal",L04:"L04 Lojão",L05:"L05 Alvorada",L08:"L08 Tradição",L09:"L09 Massangana"};
+const LOJA_COR = {L01:"#1976D2", L02:"#388E3C", L03:"#C2185B", L04:"#E91E63", L05:"#F57C00", L08:"#7B1FA2", L09:"#00838F"};
 function badgeLoja(cod){ return `<span class="badge-loja" style="background:${LOJA_COR[cod]||'#607D8B'}">${cod}</span>`; }
 const PAPEIS = {operador:"Operador",prevencao:"Prevenção de perdas",gestor:"Gestor",fornecedor:"Fornecedor"};
 const JANELA_SEG = 5, DEGRAU = 0.15, UPLIFT = 0.30, MAX_DEGRAUS = 3, DIAS_VMD = 14;
