@@ -586,6 +586,7 @@ let secaoFiltro = null;  // null = todas
 function secaoDo(l){ return (l.produtos && l.produtos.secao) || null; }
 
 let ordenar = "prioridade";  // prioridade | recente | loja
+let lojaFiltro = null;       // filtro de loja na visão "Por loja"
 let apenasAnalisar = false;
 const ORDENACOES = {
   prioridade:"Data · Quantidade",
@@ -619,6 +620,7 @@ function vGestor(){
   let ls = secaoFiltro
     ? todosLotes.filter(l=> (secaoDo(l)||"(sem seção)")===secaoFiltro)
     : todosLotes;
+  if(ordenar==="loja" && lojaFiltro) ls = ls.filter(l=> l.loja===lojaFiltro);
   if(apenasAnalisar) ls = ls.filter(l=> !l.analisado_em);
   ls = ordenarLotes(ls);
   const ativos = ls.filter(l=>!l.zerado);
@@ -651,6 +653,19 @@ function vGestor(){
     <span>Ordenar por:</span>
     ${Object.entries(ORDENACOES).map(([k,v])=>`<button class="chip ${ordenar===k?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="setOrdem('${k}')">${v}</button>`).join("")}
   </div>`;
+  // seletor de loja (aparece na visão "Por loja")
+  let seletorLoja = "";
+  if(ordenar==="loja"){
+    const contLoja = {};
+    todosLotes.forEach(l=>{ contLoja[l.loja]=(contLoja[l.loja]||0)+1; });
+    const lojasPres = Object.keys(contLoja).sort();
+    seletorLoja = `
+    <div style="display:flex; align-items:center; gap:6px; margin:2px 0 6px; font-size:12px; color:var(--mut); overflow-x:auto; -webkit-overflow-scrolling:touch;">
+      <span>Loja:</span>
+      <button class="chip ${!lojaFiltro?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="setLojaFiltro(null)">Todas</button>
+      ${lojasPres.map(lj=>`<button class="chip ${lojaFiltro===lj?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="setLojaFiltro('${lj}')">${lj} <span class="chip-n">${contLoja[lj]}</span></button>`).join("")}
+    </div>`;
+  }
   return `
   <div class="ress"><div><div class="l">Ressarcimento a demandar dos fornecedores</div><div class="v">${brl(ress)}</div></div><div style="font-size:26px;">🧾</div></div>
   <div class="kpis">
@@ -668,7 +683,8 @@ function vGestor(){
   </div>
   ${chips}
   ${seletorOrdem}
-  <h3 class="sec">${apenasAnalisar?'Aguardando análise':ORDENACOES[ordenar]}${secaoFiltro?' · '+secaoFiltro:''}</h3>
+  ${seletorLoja}
+  <h3 class="sec">${apenasAnalisar?'Aguardando análise':ORDENACOES[ordenar]}${ordenar==='loja'&&lojaFiltro?' · '+(LOJAS[lojaFiltro]||lojaFiltro):''}${secaoFiltro?' · '+secaoFiltro:''}</h3>
   <div class="card" style="padding:6px 16px;">
   ${ativos.map(l=>{
     const d=diasAte(l.validade), b=bucket(d), r=ressarcLote(l);
@@ -687,7 +703,8 @@ function vGestor(){
   </div>`;
 }
 function setSecao(s){ secaoFiltro=s; render(); }
-function setOrdem(o){ ordenar=o; render(); }
+function setOrdem(o){ ordenar=o; if(o!=="loja") lojaFiltro=null; render(); }
+function setLojaFiltro(lj){ lojaFiltro=lj; render(); }
 function toggleAnalisar(){ apenasAnalisar=!apenasAnalisar; render(); }
 
 function vItem(id){
