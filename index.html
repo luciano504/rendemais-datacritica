@@ -251,7 +251,7 @@ async function render(){
   renderNav();
   // proteção: rotas exclusivas do gestor
   const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet"];
-  const rotasPrev = ["calendario","placas"];
+  const rotasPrev = ["calendario","placas","retirada"];
   if(sess){
     if(rotasGestor.includes(route.page) && nivel(sess.papel)<3){
       v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é exclusiva do gestor.</div>';
@@ -271,6 +271,7 @@ async function render(){
     if(route.page==="login"){ await carregarUsuarios(); v.innerHTML = vLogin(); }
     else if(route.page==="contagem"){ await carregarLotes(); v.innerHTML = vContagem(); initScanUI(); }
     else if(route.page==="calendario"){ await carregarLotes(); v.innerHTML = vCalendario(); }
+    else if(route.page==="retirada"){ await carregarLotes(); v.innerHTML = vRetirada(); initScanUI(); }
     else if(route.page==="placas"){ await carregarLotes(); await histTodos(); if(sess.papel==="fornecedor") await carregarEansForn(); v.innerHTML = vPlacas(); }
     else if(route.page==="fornhome"){ await carregarLotes(); await histTodos(); v.innerHTML = await vFornHome(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); await carregarSugestoes(); v.innerHTML = vGestor(); }
@@ -570,7 +571,12 @@ function vCalendario(){
       </div>`;
     }).join("")+`</div>`;
   }
-  return `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
+  const btnRetirada = `
+  <div class="alertbox" style="background:#FFF3E0; border:1px solid #FFCC80; color:#7A4A00; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+    <div>🚨 <b>Retirou item vencido que não estava acompanhado?</b><br><span style="font-size:12px;">Registre aqui com fotos — vira comprovante e lançamento ao fornecedor.</span></div>
+    <button class="btn-sm" style="margin:0; padding:8px 12px; background:#E65100; color:#fff; border:none; border-radius:8px; font-size:12px; flex:0 0 auto;" onclick="go('retirada')">Registrar retirada</button>
+  </div>`;
+  return btnRetirada + `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
 }
 async function resolver(id){
   loading(true);
@@ -579,6 +585,115 @@ async function resolver(id){
     if(error) throw error;
   }catch(e){ erroDB(e); }
   loading(false); render();
+}
+
+/* ============ RETIRADA SEM ACOMPANHAMENTO (Prevenção) ============ */
+let lojaRetirada = null;
+function setLojaRetirada(v){ lojaRetirada = v||null; }
+function vRetirada(){
+  if(sess.papel!=="gestor") lojaRetirada = sess.loja;
+  const seletorLoja = sess.papel==="gestor" ? `
+    <label>Loja onde o item foi retirado</label>
+    <select id="rloja" onchange="setLojaRetirada(this.value)">
+      <option value="">— escolha a loja —</option>
+      ${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${lojaRetirada===k?'selected':''}>${v}</option>`).join("")}
+    </select>` : "";
+  return `
+  <div class="card">
+    <h2>🚨 Retirada sem acompanhamento</h2>
+    <p class="muted">Item vencido (ou impróprio) retirado de loja <b>sem contagem prévia</b>. O registro cria o histórico, arquiva as fotos como comprovante e lança o custo ao fornecedor — igual ao descarte validado.</p>
+    ${seletorLoja}
+    <label>Código EAN</label>
+    <div class="row">
+      <input id="ean" inputmode="numeric" placeholder="Digite ou escaneie o código">
+      <button class="btn-s btn-sm" style="flex:0 0 auto;" onclick="toggleScan()" id="btnCam">📷 Câmera</button>
+    </div>
+    <video id="scanbox" playsinline muted></video>
+    <div id="pinfo"></div>
+    <label>Validade encontrada na embalagem</label><input id="rval" type="date" max="${hoje()}">
+    <label>Quantidade retirada</label><input id="rqtd" inputmode="numeric" placeholder="0">
+    <label>Motivo</label>
+    <select id="rmot">
+      <option>Vencido sem acompanhamento</option>
+      <option>Avariado</option>
+      <option>Impróprio para venda</option>
+    </select>
+    <label>Fotos do comprovante (obrigatório, até 3)</label>
+    <input id="rfotos" type="file" accept="image/*" capture="environment" multiple>
+    <button class="btn-p" onclick="salvarRetirada()">Registrar retirada</button>
+    <button class="btn-s" onclick="go('calendario')">Voltar</button>
+  </div>`;
+}
+async function salvarRetirada(){
+  const ean = document.getElementById("ean").value.trim();
+  const val = document.getElementById("rval").value;
+  const qtd = parseFloat(document.getElementById("rqtd").value);
+  const motivo = document.getElementById("rmot").value;
+  const files = [...(document.getElementById("rfotos").files||[])];
+  const loja = sess.papel==="gestor" ? lojaRetirada : sess.loja;
+  if(!loja) return alert("Escolha a loja onde o item foi retirado.");
+  if(!ean) return alert("Informe o EAN do produto.");
+  if(!val) return alert("Informe a validade encontrada na embalagem.");
+  if(!(qtd>0)) return alert("Informe a quantidade retirada.");
+  if(!files.length) return alert("Anexe pelo menos 1 foto como comprovante.");
+  if(files.length>3) return alert("No máximo 3 fotos.");
+  loading(true);
+  try{
+    // garante o produto cadastrado (mesma regra da contagem: via catálogo do VR)
+    if(!prodAtual){
+      if(!catAtual){
+        loading(false);
+        return alert("Produto não está no catálogo da rede. Cadastre-o no VR Controller e aguarde a sincronização.");
+      }
+      const novo = {ean, id_produto:catAtual.id_produto, descricao:catAtual.descricao};
+      const {data:pr,error:ep} = await sb.from("produtos").upsert(novo,{onConflict:"ean"}).select().single();
+      if(ep) throw ep;
+      prodAtual = pr;
+    }
+    const pl = ploja(ean, loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",loja).maybeSingle()).data || {};
+    const custo = Number(pl.ultimo_custo)||0;
+    const valor = qtd*custo;
+    if(!confirm(`Registrar retirada sem acompanhamento?\n\n${prodAtual.descricao}\n${LOJAS[loja]} · ${qtd} un · validade ${fmtData(val)}\nMotivo: ${motivo}\nFotos: ${files.length}\n${custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Custo indisponível — sem lançamento ao fornecedor"}`)) { loading(false); return; }
+    // lote retroativo (contagem era zero — item não estava acompanhado)
+    const {data:lote, error:eL} = await sb.from("lotes").insert({
+      ean, loja, validade:val, qtd_inicial:qtd, qtd_restante:qtd,
+      preco_atual: pl.preco_venda?Number(pl.preco_venda):null,
+      criado_por:sess.id, criado_por_nome:sess.nome, resolvido:true
+    }).select().single();
+    if(eL) throw eL;
+    const fotos = [];
+    for(let i=0;i<files.length;i++){
+      const blob = await comprimirImagem(files[i]);
+      const path = `${lote.id}/${Date.now()}_${i}.jpg`;
+      const {error:eU} = await sb.storage.from("descartes").upload(path, blob, {contentType:"image/jpeg", upsert:true});
+      if(eU) throw new Error("Upload da foto "+(i+1)+": "+eU.message);
+      fotos.push(sb.storage.from("descartes").getPublicUrl(path).data.publicUrl);
+    }
+    const {error:eD} = await sb.from("descartes").upsert({
+      lote_id: lote.id, qtd_contada: 0, qtd_validada: qtd,
+      fotos, status: "validado",
+      validado_por: sess.nome + " — retirada sem acompanhamento (" + motivo + ")",
+      validado_em: new Date().toISOString()
+    }, {onConflict:"lote_id"});
+    if(eD) throw eD;
+    if(custo>0){
+      const {error:eR} = await sb.from("ressarcimento_diario").upsert({
+        lote_id: lote.id, ean, loja,
+        id_fornecedor: pl.id_fornecedor, nome_fornecedor: pl.nome_fornecedor,
+        data: String(val).slice(0,10),
+        qtd_vendida: qtd, preco_normal: custo, preco_vigente: 0,
+        valor: Math.round(valor*100)/100
+      }, {onConflict:"lote_id,data"});
+      if(eR) throw eR;
+    }
+    alert("Retirada registrada"+(custo>0?` — ${brl(valor)} lançado ao fornecedor`:"")+". Comprovante com fotos arquivado.\n\nA loja não tinha acompanhado este item: a contagem ficou registrada como 0 → "+qtd+" retiradas pela Prevenção.");
+    document.getElementById("ean").value=""; document.getElementById("rval").value="";
+    document.getElementById("rqtd").value=""; document.getElementById("rfotos").value="";
+    document.getElementById("pinfo").innerHTML="";
+    prodAtual=null; catAtual=null;
+    go('calendario');
+  }catch(e){ erroDB(e); }
+  loading(false);
 }
 
 /* ================= GESTOR ================= */
