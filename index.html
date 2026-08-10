@@ -1702,8 +1702,11 @@ async function vFornecDet(param){
 
   document.getElementById("view").innerHTML = `
   <div class="card">
-    <h2>${nome}</h2>
-    <p class="muted">${mesLabel(mes)}${ids.length>1?` · ${ids.length} CNPJs agrupados`:''}</p>
+    <div style="display:flex; justify-content:space-between; align-items:start; gap:10px;">
+      <div><h2>${nome}</h2>
+      <p class="muted">${mesLabel(mes)}${ids.length>1?` · ${ids.length} CNPJs agrupados`:''}</p></div>
+      <button class="btn-s btn-sm" style="flex:0 0 auto; margin:0;" onclick="baixarFornecPdf('${ids.join(",")}','${mes}')">⬇️ Baixar PDF</button>
+    </div>
     <div class="kpis" style="margin-top:12px;">
       <div class="kpi"><div class="v">${brl(totGer)}</div><div class="l">Total a ressarcir</div></div>
       <div class="kpi"><div class="v">${brl(totPag)}</div><div class="l">Já ressarcido</div></div>
@@ -1752,6 +1755,147 @@ async function vFornecDet(param){
     </div>`;
   }).join("") : '<p class="muted">Sem itens neste mês.</p>'}
   </div>`;
+}
+
+/* ---- PDF do acompanhamento do fornecedor (para negociação) ---- */
+async function _imgData(url){
+  try{
+    const r = await fetch(url); if(!r.ok) return null;
+    const blob = await r.blob();
+    return await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=()=>res(null); fr.readAsDataURL(blob); });
+  }catch(e){ return null; }
+}
+async function baixarFornecPdf(idsStr, mes){
+  if(!window.jspdf) return alert("Biblioteca de PDF ainda carregando — tente de novo em 2 segundos.");
+  loading(true);
+  try{
+    const ids = String(idsStr).split(",").map(x=>parseInt(x)).filter(Boolean);
+    const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+    const {data:ress} = await sb.from("ressarcimento_diario").select("*")
+      .in("id_fornecedor",ids).gte("data",ini).lt("data",fim).order("data",{ascending:true});
+    const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").in("id_fornecedor",ids).eq("mes_referencia",mes).order("criado_em");
+    const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
+    let descartesV = [];
+    if(lotesVencIds.length){
+      try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+    }
+    const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
+    const eans = [...new Set((ress||[]).map(r=>r.ean))];
+    const descrMap = {};
+    if(eans.length){
+      const {data:prods} = await sb.from("produtos").select("ean,descricao").in("ean",eans);
+      (prods||[]).forEach(p=>{ descrMap[p.ean]=p.descricao; });
+    }
+    const grupos = {};
+    (ress||[]).forEach(r=>{
+      const k = r.ean+"|"+r.loja;
+      const g = grupos[k] || (grupos[k]={ean:r.ean, loja:r.loja, descricao:descrMap[r.ean]||r.ean, unidades:0, valor:0, tipo:(Number(r.preco_vigente)>0?"Rebaixa":"Descarte")});
+      g.unidades += Number(r.qtd_vendida)||0;
+      g.valor += Number(r.valor)||0;
+      if(Number(r.preco_vigente)===0) g.tipo = "Descarte";
+    });
+    const itens = Object.values(grupos).sort((a,b)=>b.valor-a.valor);
+    const nome = (ress&&ress[0]&&ress[0].nome_fornecedor) || (pags&&pags[0]&&pags[0].nome_fornecedor) || "Fornecedor";
+    const totGer = itens.reduce((a,x)=>a+x.valor,0);
+    const totPag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
+    const saldo = totGer - totPag;
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
+    const W = 210, ML = 14, MR = 196; let y = 0;
+    const NAVY = [31,56,100], RED = [198,40,40], MUT = [120,120,120];
+    const nl = () => { if(y > 272){ doc.addPage(); y = 16; } };
+    // cabeçalho
+    doc.setFillColor(...NAVY); doc.rect(0,0,W,26,"F");
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(14);
+    doc.text("Acompanhamento de Fornecedor — Data Crítica", ML, 11);
+    doc.setFontSize(10); doc.setFont("helvetica","normal");
+    doc.text("Rende Mais Supermercados · " + mesLabel(mes) + " · gerado em " + fmtData(hoje()) + " por " + (sess?sess.nome:""), ML, 19);
+    y = 34;
+    doc.setTextColor(...NAVY); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+    doc.text(String(nome), ML, y); y += 8;
+    // resumo
+    const kpi = (label, valor, cor) => {
+      doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(...MUT);
+      doc.text(label, ML, y);
+      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...cor);
+      doc.text(valor, 196, y, {align:"right"}); y += 6.5;
+    };
+    kpi("Total a ressarcir no mês", brl(totGer), NAVY);
+    kpi("Já ressarcido", brl(totPag), NAVY);
+    kpi("Saldo devedor", brl(saldo), saldo>0.01?RED:NAVY);
+    y += 3;
+    // tabela de itens
+    doc.setDrawColor(220); doc.line(ML, y, MR, y); y += 6;
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...NAVY);
+    doc.text("Itens do mês", ML, y); y += 6;
+    doc.setFontSize(8.5); doc.setTextColor(...MUT);
+    doc.text("Produto", ML, y); doc.text("Loja", 118, y); doc.text("Tipo", 134, y);
+    doc.text("Un", 156, y, {align:"right"}); doc.text("Valor", 196, y, {align:"right"}); y += 2;
+    doc.setDrawColor(200); doc.line(ML, y, MR, y); y += 4.5;
+    doc.setFont("helvetica","normal"); doc.setTextColor(40,40,40);
+    itens.forEach(i=>{
+      nl();
+      const d = doc.splitTextToSize(String(i.descricao||i.ean), 100)[0];
+      doc.setFontSize(8.5);
+      doc.text(d, ML, y);
+      doc.text(String(i.loja||""), 118, y);
+      doc.text(i.tipo, 134, y);
+      doc.text(String(Math.round(i.unidades)), 156, y, {align:"right"});
+      doc.setFont("helvetica","bold"); doc.text(brl(i.valor), 196, y, {align:"right"}); doc.setFont("helvetica","normal");
+      y += 5;
+    });
+    if(!itens.length){ doc.setFontSize(9); doc.text("Sem itens neste mês.", ML, y); y += 5; }
+    doc.setDrawColor(200); doc.line(ML, y, MR, y); y += 5;
+    doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(...NAVY);
+    doc.text("TOTAL", ML, y); doc.text(brl(totGer), 196, y, {align:"right"}); y += 8;
+    // recebimentos
+    if(pags && pags.length){
+      nl();
+      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text("Recebimentos no mês", ML, y); y += 6;
+      doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(40,40,40);
+      pags.forEach(p=>{
+        nl();
+        doc.text(fmtData(p.criado_em) + " · " + (p.descricao||"") + " · aval: " + (p.aval_por_nome||"?"), ML, y);
+        doc.setFont("helvetica","bold"); doc.text(brl(p.valor), 196, y, {align:"right"}); doc.setFont("helvetica","normal");
+        y += 5;
+      });
+      y += 3;
+    }
+    // comprovantes de descarte com fotos
+    if(descartesV.length){
+      nl();
+      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...NAVY);
+      doc.text("Comprovantes de descarte", ML, y); y += 6;
+      for(const d of descartesV){
+        if(y > 240){ doc.addPage(); y = 16; }
+        const r = ressPorLote[d.lote_id]||{};
+        doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(40,40,40);
+        doc.text(doc.splitTextToSize((descrMap[r.ean]||r.ean||"Produto") + " — " + (LOJAS[r.loja]||r.loja||""), 175)[0], ML, y); y += 4.5;
+        doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...MUT);
+        doc.text("Venceu " + (r.data?fmtData(r.data):"") + " · " + Number(d.qtd_validada) + " un descartadas (contagem: " + Number(d.qtd_contada) + ") · " + (d.validado_por||""), ML, y); y += 4;
+        const fotos = (Array.isArray(d.fotos)?d.fotos:[]).slice(0,3);
+        if(fotos.length){
+          let x = ML;
+          for(const u of fotos){
+            const img = await _imgData(u);
+            if(img){ try{ doc.addImage(img, "JPEG", x, y, 26, 26); x += 30; }catch(e){} }
+          }
+          y += 30;
+        } else y += 2;
+      }
+    }
+    // rodapé com numeração
+    const total = doc.getNumberOfPages();
+    for(let p=1;p<=total;p++){
+      doc.setPage(p);
+      doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(...MUT);
+      doc.text("Rende Mais · Data Crítica · " + nome + " · " + mesLabel(mes) + " — página " + p + " de " + total, W/2, 292, {align:"center"});
+    }
+    const nomeArq = "fornecedor_" + String(nome).trim().replace(/[^A-Za-z0-9]+/g,"_").slice(0,40) + "_" + mes + ".pdf";
+    doc.save(nomeArq);
+  }catch(e){ alert("Erro ao gerar o PDF: " + (e.message||e)); }
+  loading(false);
 }
 
 async function registrarPagamento(idFornec, nomeFornec, mes){
