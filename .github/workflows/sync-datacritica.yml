@@ -21,7 +21,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - name: Baixar o pipeline (repo privado)
         uses: actions/checkout@v4
@@ -40,3 +40,20 @@ jobs:
         env:
           VR_URL: ${{ secrets.VR_URL }}
         run: python scripts/sync_datacritica.py
+
+      # A base de quem tem acesso de fornecedor entra sozinha: item com estoque
+      # e venda nos ultimos 90 dias, cuja ultima entrada na loja veio dele.
+      # Nao derruba o sync se falhar - o sync ja terminou aqui.
+      - name: Expandir a base dos fornecedores cadastrados
+        if: always()
+        continue-on-error: true
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DIAS_VENDA: "90"
+        run: |
+          if [ -f scripts/expandir_fornecedores.py ]; then
+            python scripts/expandir_fornecedores.py
+          else
+            echo "scripts/expandir_fornecedores.py ainda nao esta no pipeline."
+          fi
