@@ -1,0 +1,42 @@
+name: Sync Data Critica (VR -> App)
+
+# Roda AQUI, no repo publico, porque minutos de Actions em repositorio publico
+# sao gratuitos e ilimitados. O codigo continua privado no rendemais-pipeline:
+# este workflow so faz checkout de la usando o secret PIPELINE_TOKEN.
+# Substitui o workflow de mesmo nome que rodava no rendemais-pipeline.
+
+on:
+  schedule:
+    # 07h e 16h de Recife (UTC-3) -> 10 e 19 em UTC
+    - cron: "0 10,19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-datacritica
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Baixar o pipeline (repo privado)
+        uses: actions/checkout@v4
+        with:
+          repository: luciano504/rendemais-pipeline
+          token: ${{ secrets.PIPELINE_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pandas requests
+
+      - name: Sincronizar VR -> Supabase
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+        run: python scripts/sync_datacritica.py
