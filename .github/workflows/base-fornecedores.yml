@@ -1,0 +1,44 @@
+name: Base ativa dos fornecedores
+
+# Monta o catalogo_fornecedor: todo item cadastrado no fornecedor que tem
+# estoque na loja e vendeu nos ultimos 90 dias. E o que ele ve na hora de
+# criar uma campanha. Nao mexe em produtos_loja (Calendario e Gestao).
+# Roda sozinho, sem esperar o sync de 20 minutos.
+
+on:
+  schedule:
+    # 08h30 de Recife (UTC-3)
+    - cron: "30 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-fornecedores
+  cancel-in-progress: false
+
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Baixar o pipeline (repo privado)
+        uses: actions/checkout@v4
+        with:
+          repository: luciano504/rendemais-pipeline
+          token: ${{ secrets.PIPELINE_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pandas requests
+
+      - name: Expandir a base dos fornecedores cadastrados
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DIAS_VENDA: "90"
+        run: python scripts/expandir_fornecedores.py
