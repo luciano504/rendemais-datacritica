@@ -235,7 +235,8 @@ function renderNav(){
       `<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span>${t[1]}</span>${t[2]}</button>`).join("");
     return;
   }
-  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["placas","🖨","Placas",2],["gestor","📊","Gestão",3],["perdas","📉","Perdas",3],["fornec","💰","Fornec.",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
+  const nSug = window.__nSug ? " ("+window.__nSug+")" : "";
+  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["sugestoes","💡","Sugestões"+nSug,2],["placas","🖨","Placas",2],["gestor","📊","Gestão",3],["perdas","📉","Perdas",3],["fornec","💰","Fornec.",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
   n.innerHTML = tabs.filter(t=>nivel(sess.papel)>=t[3])
     .map(t=>`<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span class="ic">${t[1]}</span>${t[2]}</button>`).join("");
 }
@@ -251,7 +252,7 @@ async function render(){
   renderNav();
   // proteção: rotas exclusivas do gestor
   const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet","perdas"];
-  const rotasPrev = ["calendario","placas","retirada"];
+  const rotasPrev = ["calendario","placas","retirada","sugestoes"];
   if(sess){
     if(rotasGestor.includes(route.page) && nivel(sess.papel)<3){
       v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é exclusiva do gestor.</div>';
@@ -276,6 +277,7 @@ async function render(){
     else if(route.page==="fornhome"){ await carregarLotes(); await histTodos(); v.innerHTML = await vFornHome(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); await carregarSugestoes(); v.innerHTML = vGestor(); }
     else if(route.page==="itemdet"){ await carregarLotes(); await carregarSugestoes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
+    else if(route.page==="sugestoes"){ v.innerHTML = '<div class="card center muted">Carregando sugestões…</div>'; await vSugestoes(); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
@@ -930,9 +932,185 @@ async function pedirSync(){
   loading(false);
 }
 
+/* ============ SUGESTÕES DE REBAIXA DOS FORNECEDORES ============ */
+let sugFiltroLoja = "", sugFiltroSecao = "";
+function setSugLoja(v){ sugFiltroLoja = v; render(); }
+function setSugSecao(v){ sugFiltroSecao = v; render(); }
+let sugCache = [];
+
+async function vSugestoes(){
+  const view = document.getElementById("view");
+  const {data:sugs, error} = await sb.from("sugestoes_fornecedor")
+    .select("*").eq("status","pendente").order("criado_em");
+  if(error){
+    view.innerHTML = `<div class="alertbox a-red">Não consegui ler as sugestões: ${error.message}</div>`;
+    return;
+  }
+  window.__nSug = (sugs||[]).length; renderNav();
+
+  if(!sugs || !sugs.length){
+    sugCache = [];
+    view.innerHTML = `<div class="card center">
+      <div style="font-size:38px;">💡</div>
+      <h2>Nenhuma sugestão aguardando</h2>
+      <p class="muted">Quando um fornecedor sugerir um preço de rebaixa no portal dele,
+      o item aparece aqui para você aceitar ou recusar — em lote, sem abrir um por um.</p></div>`;
+    return;
+  }
+
+  // contexto de cada sugestão: o lote, o produto e os dados da loja
+  const ids = [...new Set(sugs.map(s=>s.lote_id))];
+  const {data:lotes} = await sb.from("lotes").select("*, produtos(descricao,secao)").in("id", ids);
+  const porLote = {}; (lotes||[]).forEach(l=>{ porLote[l.id] = l; });
+  const eans = [...new Set((lotes||[]).map(l=>l.ean))];
+  const plj = {};
+  for(let i=0;i<eans.length;i+=200){
+    const {data:pl} = await sb.from("produtos_loja").select("*").in("ean", eans.slice(i,i+200));
+    (pl||[]).forEach(p=>{ plj[p.ean+"|"+p.loja] = p; });
+  }
+
+  const linhas = sugs.map(s=>{
+    const l = porLote[s.lote_id];
+    if(!l) return null;
+    const pl = plj[l.ean+"|"+l.loja] || {};
+    const atual = Number(l.preco_atual || pl.preco_venda || 0);
+    const custo = Number(pl.ultimo_custo || 0);
+    const preco = Number(s.preco || 0);
+    return {s, l, pl, atual, custo, preco,
+            dias: diasAte(l.validade),
+            secao: (l.produtos && l.produtos.secao) || "(sem seção)",
+            desc: (l.produtos && l.produtos.descricao) || l.ean,
+            abaixoCusto: custo > 0 && preco < custo,
+            desconto: atual > 0 ? (1 - preco/atual) : 0};
+  }).filter(Boolean).sort((a,b)=>a.dias-b.dias);
+
+  sugCache = linhas;
+
+  const lojas = [...new Set(linhas.map(x=>x.l.loja))].sort();
+  const secoes = [...new Set(linhas.map(x=>x.secao))].sort();
+  const vis = linhas.filter(x=>(!sugFiltroLoja || x.l.loja===sugFiltroLoja)
+                            && (!sugFiltroSecao || x.secao===sugFiltroSecao));
+  const nAbaixo = vis.filter(x=>x.abaixoCusto).length;
+
+  const chip = (txt, ativo, fn) =>
+    `<button class="chip ${ativo?'chip-on':''}" onclick="${fn}">${txt}</button>`;
+
+  view.innerHTML = `
+  <div class="card">
+    <h2>💡 Sugestões de rebaixa dos fornecedores</h2>
+    <p class="muted">${linhas.length} item(ns) aguardando decisão. Marque os que quiser e resolva de uma vez —
+    aceitar aplica o preço no lote e avisa o fornecedor; nada muda sem você.</p>
+    ${nAbaixo ? `<div class="alertbox a-red" style="margin-top:8px;">⚠️ ${nAbaixo} sugestão(ões) abaixo do último custo. Confira antes de aceitar.</div>` : ""}
+    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">
+      ${chip("Todas as lojas", !sugFiltroLoja, "setSugLoja('')")}
+      ${lojas.map(lj=>chip(lj+" ("+linhas.filter(x=>x.l.loja===lj).length+")", sugFiltroLoja===lj, `setSugLoja('${lj}')`)).join("")}
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+      ${chip("Todas as seções", !sugFiltroSecao, "setSugSecao('')")}
+      ${secoes.map(sc=>chip(sc+" ("+linhas.filter(x=>x.secao===sc).length+")", sugFiltroSecao===sc, `setSugSecao('${String(sc).replace(/'/g,"\\'")}')`)).join("")}
+    </div>
+    <div class="row" style="margin-top:12px; flex-wrap:wrap;">
+      <button class="btn-s" onclick="sugMarcarTodas(true)">Marcar todas</button>
+      <button class="btn-s" onclick="sugMarcarTodas(false)">Desmarcar</button>
+      <button class="btn-ok" onclick="aceitarSelecionadas()">✓ Aceitar selecionadas</button>
+      <button class="btn-s" onclick="recusarSelecionadas()">Recusar selecionadas</button>
+    </div>
+  </div>
+
+  ${vis.length ? vis.map(x=>{
+    const b = bucket(x.dias);
+    return `
+    <div class="card" style="border-left:6px solid ${x.abaixoCusto?'var(--danger)':b.cor};">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <input type="checkbox" class="sugchk" data-sug="${x.s.id}" data-lote="${x.l.id}" data-preco="${x.preco}"
+               style="width:22px; height:22px; margin-top:4px; flex:none;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:700; font-size:15px;">${x.desc}</div>
+          <div class="muted" style="font-size:12px;">${x.l.ean} · ${x.secao}</div>
+          <div style="margin:6px 0;">${badgeLoja(x.l.loja)}
+            <span style="color:${b.cor}; font-weight:700;">${x.dias<=0?"vence hoje":"vence em "+x.dias+" dias"}</span>
+            <span class="muted">· ${fmtData(x.l.validade)} · ${Number(x.l.qtd_restante)} un em estoque</span>
+          </div>
+          <div style="display:flex; gap:14px; align-items:baseline; flex-wrap:wrap;">
+            <span class="muted" style="text-decoration:line-through;">${brl(x.atual)}</span>
+            <span style="font-size:22px; font-weight:800; color:#1565C0;">${brl(x.preco)}</span>
+            ${x.desconto>0 ? `<span class="muted">−${(x.desconto*100).toFixed(0)}%</span>` : ""}
+            ${x.custo ? `<span class="muted">custo ${brl(x.custo)}</span>` : ""}
+            ${x.abaixoCusto ? `<span style="color:var(--danger); font-weight:700;">abaixo do custo</span>` : ""}
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            ${x.s.nome_fornecedor||"Fornecedor"} · sugerido por ${x.s.sugerido_por||"?"} em ${fmtData(x.s.criado_em)}
+          </div>
+          <div class="row" style="margin-top:8px; flex-wrap:wrap;">
+            <button class="btn-ok btn-sm" onclick="aceitarSugestao(${x.s.id},'${x.l.id}',${x.preco})">✓ Aceitar</button>
+            <button class="btn-s btn-sm" onclick="recusarSugestao(${x.s.id})">Recusar</button>
+            <button class="btn-s btn-sm" onclick="go('itemdet','${x.l.id}')">Abrir item</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join("") : `<div class="card center muted">Nenhuma sugestão neste filtro.</div>`}`;
+}
+
+function sugMarcarTodas(v){
+  document.querySelectorAll(".sugchk").forEach(c=>{ c.checked = v; });
+}
+function sugSelecionadas(){
+  return [...document.querySelectorAll(".sugchk:checked")].map(c=>({
+    id: Number(c.dataset.sug), lote: c.dataset.lote, preco: Number(c.dataset.preco)
+  }));
+}
+
+async function aceitarSelecionadas(){
+  const sel = sugSelecionadas();
+  if(!sel.length) return alert("Marque pelo menos uma sugestão.");
+  const abaixo = sel.filter(s=>{ const x = sugCache.find(y=>y.s.id===s.id); return x && x.abaixoCusto; });
+  let aviso = `Aplicar ${sel.length} preço(s) sugerido(s) e marcar como aceitos?`;
+  if(abaixo.length) aviso += `\n\nATENÇÃO: ${abaixo.length} está(ão) abaixo do último custo.`;
+  if(!confirm(aviso)) return;
+  loading(true);
+  let ok=0, falhas=[];
+  for(const s of sel){
+    try{
+      const {error} = await sb.from("lotes").update({preco_atual:s.preco, pend_apoio:true,
+        analisado_em:new Date().toISOString()}).eq("id", s.lote);
+      if(error) throw error;
+      await sb.from("precos_hist").insert({lote_id:s.lote, preco:s.preco,
+        aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (sug. fornecedor)"});
+      await sb.from("sugestoes_fornecedor").update({status:"aceita",
+        respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id", s.id);
+      ok++;
+    }catch(e){ falhas.push(s.id); }
+  }
+  loading(false);
+  alert(`${ok} sugestão(ões) aceita(s) e preço aplicado.`
+        + (falhas.length? `\n${falhas.length} falhou(ram) — tente de novo.` : ""));
+  render();
+}
+
+async function recusarSelecionadas(){
+  const sel = sugSelecionadas();
+  if(!sel.length) return alert("Marque pelo menos uma sugestão.");
+  if(!confirm(`Recusar ${sel.length} sugestão(ões)? Os fornecedores verão a recusa no portal.`)) return;
+  loading(true);
+  let ok=0;
+  for(const s of sel){
+    try{
+      await sb.from("sugestoes_fornecedor").update({status:"recusada",
+        respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id", s.id);
+      ok++;
+    }catch(e){}
+  }
+  loading(false);
+  alert(`${ok} sugestão(ões) recusada(s).`);
+  render();
+}
+
 async function aceitarSugestao(sugId, loteId, preco){
   const l = cache.lotes.find(x=>x.id===loteId);
-  const custo = (ploja(l.ean,l.loja)||{}).ultimo_custo;
+  // a aba de sugestões não carrega cache.lotes; usa o contexto que ela já buscou
+  const daAba = (typeof sugCache!=="undefined" && sugCache.find(x=>x.s.id===sugId)) || null;
+  const custo = l ? (ploja(l.ean,l.loja)||{}).ultimo_custo : (daAba ? daAba.custo : 0);
   if(custo && preco<Number(custo) && !confirm("Preço sugerido está abaixo do custo ("+brl(custo)+"). Aceitar mesmo assim?")) return;
   if(!confirm(`Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`)) return;
   loading(true);
