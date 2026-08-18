@@ -918,16 +918,24 @@ function vItem(id){
   </div>`;
 }
 async function pedirSync(){
-  if(!confirm("Solicitar atualização dos dados do VR agora?\n\nUsado quando você acabou de cadastrar produtos novos e quer os preços/estoques imediatamente. A execução acontece em até 5 minutos.")) return;
+  const senha = prompt("🔄 Sincronizar dados do VR agora?\n\nA sincronização automática continua rodando nos horários fixos (07h e 16h). Este disparo manual é para quando você acabou de cadastrar produtos e quer os dados na hora.\n\nDigite a senha de liberação:");
+  if(senha===null) return;
+  if(!senha.trim()) return;
   loading(true);
   try{
-    const {error} = await sb.from("sync_solicitacoes").insert({solicitado_por: sess.nome});
-    if(error) throw error;
-    alert("✅ Solicitação enviada.\n\nA sincronização começa em até 5 minutos e leva mais 2-3 min pra concluir. Recarregue a tela depois para ver os dados atualizados.");
+    const resp = await fetch("https://estciwkeihmokvlnvaum.supabase.co/functions/v1/disparar-sync", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({senha: senha.trim()})
+    });
+    if(resp.status===401){ alert("Senha incorreta."); loading(false); return; }
+    if(!resp.ok){
+      const t = await resp.text();
+      throw new Error("Falha ao disparar (HTTP "+resp.status+"). "+t.slice(0,120));
+    }
+    alert("✅ Sincronização disparada!\n\nLeva cerca de 12-15 minutos pra concluir. Recarregue a tela depois desse tempo para ver os dados atualizados.");
   }catch(e){
-    if(String(e.message||"").toLowerCase().includes("sync_solicitacoes")){
-      alert("O botão de sync sob demanda ainda não foi ativado no banco. Peça ao suporte para rodar o SQL de setup.");
-    } else erroDB(e);
+    alert("Não foi possível disparar a sincronização.\n\n"+(e.message||e)+"\n\nSe persistir, os horários automáticos (07h/16h) seguem funcionando normalmente.");
   }
   loading(false);
 }
