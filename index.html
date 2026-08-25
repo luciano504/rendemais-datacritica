@@ -849,6 +849,20 @@ function vItem(id){
     `<p class="muted">Dados do VR ainda não sincronizados para este produto. Venda diária estimada: ${sug.vd.toFixed(1)}/dia.</p>`}
   </div>
 
+  ${nivel(sess.papel)>=2 ? `<div class="card">
+    <details>
+      <summary style="cursor:pointer; font-weight:700; color:var(--navy);">✏️ Corrigir contagem (quantidade / validade)</summary>
+      <p class="muted" style="margin-top:8px;">Use quando a contagem foi registrada errada. A correção fica registrada (quem, quando e os valores antigos).</p>
+      <label>Quantidade inicial correta</label>
+      <input id="corrQtd" type="number" inputmode="decimal" step="1" min="0" value="${Number(l.qtd_inicial)}">
+      <label>Validade correta</label>
+      <input id="corrVal" type="date" value="${String(l.validade).slice(0,10)}">
+      <label>Motivo da correção (opcional)</label>
+      <input id="corrMot" placeholder="Ex: operador digitou 12 em vez de 21">
+      <button class="btn-p" onclick="corrigirLote('${l.id}')">Salvar correção</button>
+    </details>
+  </div>` : ""}
+
   <div class="card">
     <h2>Preço</h2>
     <div style="display:flex; align-items:baseline; gap:10px;">
@@ -1148,6 +1162,51 @@ async function reanalisar(id){
     if(error) throw error;
     alert("Item voltou para 'aguardando análise'.");
   }catch(e){ erroDB(e); }
+  loading(false); goBack();
+}
+
+async function corrigirLote(id){
+  const l = cache.lotes.find(x=>x.id===id);
+  if(!l) return;
+  const novaQtd = parseFloat(document.getElementById("corrQtd").value);
+  const novaVal = document.getElementById("corrVal").value;
+  const motivo = document.getElementById("corrMot").value.trim();
+  if(!(novaQtd>=0)) return alert("Quantidade inválida.");
+  if(!novaVal) return alert("Informe a validade correta.");
+  const qtdAntiga = Number(l.qtd_inicial);
+  const valAntiga = String(l.validade).slice(0,10);
+  const jaVendido = qtdAntiga - Number(l.qtd_restante);
+  const novoRest = Math.max(0, novaQtd - jaVendido);
+  if(qtdAntiga===novaQtd && valAntiga===novaVal) return alert("Nada mudou.");
+  if(novaQtd < jaVendido && !confirm(`Atenção: já foram vendidas ${jaVendido} un desde a contagem, mas você informou quantidade inicial de ${novaQtd}. Isso deixará o restante em 0. Confirmar mesmo assim?`)) return;
+  if(!confirm(`Confirmar correção?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nQuantidade inicial: ${qtdAntiga} → ${novaQtd}\nValidade: ${fmtData(valAntiga)} → ${fmtData(novaVal)}`)) return;
+  loading(true);
+  try{
+    await sb.from("correcoes_lote").insert({
+      lote_id: id, ean: l.ean, loja: l.loja,
+      qtd_antiga: qtdAntiga, qtd_nova: novaQtd,
+      validade_antiga: valAntiga, validade_nova: novaVal,
+      motivo: motivo || null, corrigido_por: sess.nome
+    });
+    const {error} = await sb.from("lotes").update({
+      qtd_inicial: novaQtd, qtd_restante: novoRest, validade: novaVal
+    }).eq("id", id);
+    if(error) throw error;
+    const {data:ress} = await sb.from("ressarcimento_diario").select("*").eq("lote_id", id).eq("preco_vigente", 0);
+    if(ress && ress.length){
+      for(const r of ress){
+        const custo = Number(r.preco_normal)||0;
+        await sb.from("ressarcimento_diario").update({
+          qtd_vendida: novaQtd, valor: Math.round(novaQtd*custo*100)/100, data: novaVal
+        }).eq("id", r.id);
+      }
+    }
+    await sb.from("descartes").update({qtd_validada: novaQtd}).eq("lote_id", id);
+    alert("Correção salva e registrada para auditoria.");
+  }catch(e){
+    if(String(e.message||"").includes("correcoes_lote")) alert("O registro de correções ainda não foi ativado no banco. Rode o SQL de setup.");
+    else erroDB(e);
+  }
   loading(false); goBack();
 }
 
