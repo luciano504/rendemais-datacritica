@@ -297,13 +297,24 @@ async function histTodos(){
 
 /* ================= LOGIN ================= */
 function vLogin(){
-  const ops = cache.usuarios.map(u=>`<option value="${u.id}">${u.nome} — ${PAPEIS[u.papel]} (${u.loja})</option>`).join("");
+  const ultimo = localStorage.getItem("dc_ultimo_nome") || "";
+  const modoOutra = loginModoOutra || !ultimo;
+  const campoUser = modoOutra
+    ? `<label>Seu nome</label><input id="lnome" placeholder="Digite seu nome" autocomplete="off" value="${ultimo && loginModoOutra ? "" : ""}">`
+    : `<label>Usuário</label>
+       <div class="item" style="background:#F5F7FA; border-radius:10px; padding:12px;">
+         <div><div class="t">${ultimo}</div><div class="s">Toque no PIN para entrar</div></div>
+       </div>
+       <input type="hidden" id="lnome" value="${ultimo.replace(/"/g,'&quot;')}">`;
   return `
   <div class="card">
     <h2>Entrar</h2>
-    <label>Usuário</label><select id="luser">${ops||'<option value="">Nenhum usuário cadastrado</option>'}</select>
+    ${campoUser}
     <label>PIN</label><input id="lpin" type="password" inputmode="numeric" placeholder="••••">
     <button class="btn-p" onclick="doLogin()">Entrar</button>
+    ${modoOutra
+      ? (ultimo ? `<p class="muted" style="text-align:center; margin-top:10px; cursor:pointer;" onclick="loginVoltarUltimo()">‹ Voltar para ${ultimo}</p>` : "")
+      : `<p class="muted" style="text-align:center; margin-top:10px; cursor:pointer; color:var(--navy);" onclick="loginOutraPessoa()">Sou outra pessoa</p>`}
   </div>
   <div class="card">
     <h2>Novo usuário</h2>
@@ -317,6 +328,10 @@ function vLogin(){
     <button class="btn-s" onclick="doCadUser()">Cadastrar</button>
   </div>`;
 }
+let loginModoOutra = false;
+function loginOutraPessoa(){ loginModoOutra = true; render(); }
+function loginVoltarUltimo(){ loginModoOutra = false; render(); }
+function normNome(s){ return String(s||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); }
 function toggleCadLoja(){
   const p = document.getElementById("cpapel").value;
   const sel = document.getElementById("cloja");
@@ -324,16 +339,25 @@ function toggleCadLoja(){
   else { sel.disabled=false; sel.style.opacity="1"; }
 }
 async function doLogin(){
-  const id = document.getElementById("luser").value;
+  const nomeDig = (document.getElementById("lnome")||{}).value || "";
   const pin = document.getElementById("lpin").value;
-  if(!id || !pin) return alert("Selecione o usuário e digite o PIN.");
+  if(!nomeDig.trim() || !pin) return alert("Digite seu nome e o PIN.");
   loading(true);
   try{
-    const {data,error} = await sb.from("usuarios").select("*").eq("id",id).single();
+    // busca por nome, ignorando maiúsc/minúsc e acento, apenas ativos
+    const {data:cands,error} = await sb.from("usuarios").select("*").eq("ativo",true);
     if(error) throw error;
-    if(data.pin_hash !== await sha256(pin)) { loading(false); return alert("PIN incorreto."); }
+    const alvo = normNome(nomeDig);
+    const achados = (cands||[]).filter(u=>normNome(u.nome)===alvo);
+    if(!achados.length){ loading(false); return alert("Usuário não encontrado. Confira o nome ou use 'Sou outra pessoa'."); }
+    // pode haver homônimos em lojas diferentes: tenta casar pelo PIN
+    const hash = await sha256(pin);
+    const data = achados.find(u=>u.pin_hash===hash);
+    if(!data){ loading(false); return alert("PIN incorreto."); }
     sess = data;
     localStorage.setItem("dc_sess", JSON.stringify({id:data.id}));
+    localStorage.setItem("dc_ultimo_nome", data.nome);
+    loginModoOutra = false;
     route = {page:home(), param:null, prev:[]};
   }catch(e){ erroDB(e); }
   loading(false); render();
