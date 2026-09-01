@@ -1,0 +1,35 @@
+name: Caixa e Compras (VR -> Supabase)
+# Roda AQUI, no repo publico, porque minutos de Actions em repositorio publico
+# sao gratuitos. O codigo continua fechado no rendemais-pipeline: este workflow
+# so faz checkout de la com o secret PIPELINE_TOKEN.
+on:
+  schedule:
+    # 06h30 e 14h de Recife (UTC-3) -> 09h30 e 17h em UTC
+    - cron: "30 9 * * *"
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: caixa-vr
+  cancel-in-progress: false
+jobs:
+  caixa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Baixar o pipeline (repo privado)
+        uses: actions/checkout@v4
+        with:
+          repository: luciano504/rendemais-pipeline
+          token: ${{ secrets.PIPELINE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pandas requests
+      - name: Atualizar caixa e compras
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/caixa_vr.py
