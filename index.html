@@ -571,8 +571,8 @@ function vCalendario(){
       <div style="margin-top:10px;">
         <label>Quantidade realmente descartada</label>
         <input id="dq_${l.id}" type="number" inputmode="decimal" step="1" min="0" value="${Number(l.qtd_restante)}" style="margin-bottom:8px;">
-        <label>Fotos do descarte — até 3 (câmera ou galeria)</label>
-        <input id="df_${l.id}" type="file" accept="image/*" multiple capture="environment" style="margin-bottom:8px;">
+        <label>Fotos do descarte — obrigatória, até 3 (Câmera ou Galeria)</label>
+        <input id="df_${l.id}" type="file" accept="image/*" multiple style="margin-bottom:8px;">
         <button class="btn-p" style="margin-top:4px;" onclick="confirmarDescarte('${l.id}')">✓ Confirmar descarte e lançar ao fornecedor</button>
         <p class="muted" style="margin-top:6px;">Validação da Prevenção: a quantidade confirmada × custo (${custo?brl(custo):'custo pendente'}) vira dívida de ${pl.nome_fornecedor||'(fornecedor não identificado)'}. As fotos ficam no arquivo do fornecedor como comprovante.</p>
       </div></div>`;
@@ -600,8 +600,8 @@ function vCalendario(){
   }
   const btnRetirada = `
   <div class="alertbox" style="background:#FFF3E0; border:1px solid #FFCC80; color:#7A4A00; display:flex; justify-content:space-between; align-items:center; gap:10px;">
-    <div>🚨 <b>Retirou item vencido que não estava acompanhado?</b><br><span style="font-size:12px;">Registre aqui com fotos — vira comprovante e lançamento ao fornecedor.</span></div>
-    <button class="btn-sm" style="margin:0; padding:8px 12px; background:#E65100; color:#fff; border:none; border-radius:8px; font-size:12px; flex:0 0 auto;" onclick="go('retirada')">Registrar retirada</button>
+    <div>🚨 <b>Recolheu item vencido ou avariado que não estava acompanhado?</b><br><span style="font-size:12px;">Registre aqui com fotos — vira comprovante e lançamento ao fornecedor.</span></div>
+    <button class="btn-sm" style="margin:0; padding:8px 12px; background:#E65100; color:#fff; border:none; border-radius:8px; font-size:12px; flex:0 0 auto;" onclick="go('retirada')">Recolher item</button>
   </div>`;
   return btnRetirada + `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
 }
@@ -616,51 +616,84 @@ async function resolver(id){
 
 /* ============ RETIRADA SEM ACOMPANHAMENTO (Prevenção) ============ */
 let lojaRetirada = null;
-function setLojaRetirada(v){ lojaRetirada = v||null; }
+function setLojaRetirada(v){ lojaRetirada = v||null; salvarRascunhoRetirada(); }
 function vRetirada(){
   if(sess.papel!=="gestor") lojaRetirada = sess.loja;
+  else { const d0 = lerRascunhoRetirada(); if(d0 && d0.loja && !lojaRetirada) lojaRetirada = d0.loja; }
   const seletorLoja = sess.papel==="gestor" ? `
     <label>Loja onde o item foi retirado</label>
     <select id="rloja" onchange="setLojaRetirada(this.value)">
       <option value="">— escolha a loja —</option>
       ${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}" ${lojaRetirada===k?'selected':''}>${v}</option>`).join("")}
     </select>` : "";
+  const d = lerRascunhoRetirada();
+  const aviso = d ? `<div class="alertbox" style="background:#FFF8E1; border:1px solid #FFE082; color:#6D4C00;">
+      ↩️ <b>Seus campos foram restaurados.</b> O celular recarregou a página (geralmente ao abrir a câmera com pouca memória/bateria). Confira os dados e <b>anexe a foto de novo</b>.
+      <span class="muted" style="display:block; margin-top:4px;">Dica: tire as fotos antes com a câmera do celular e escolha pela <b>Galeria</b> — é mais leve.</span></div>` : "";
   return `
   <div class="card">
-    <h2>🚨 Retirada sem acompanhamento</h2>
-    <p class="muted">Item vencido (ou impróprio) retirado de loja <b>sem contagem prévia</b>. O registro cria o histórico, arquiva as fotos como comprovante e lança o custo ao fornecedor — igual ao descarte validado.</p>
+    <h2>🚨 Retirada / Recolha pela Prevenção</h2>
+    <p class="muted">Item retirado de loja <b>sem contagem prévia</b> — vencido sem acompanhamento ou <b>avariado/impróprio</b>. O registro cria o histórico, arquiva as fotos como comprovante e lança o custo ao fornecedor.</p>
+    ${aviso}
     ${seletorLoja}
     <label>Código EAN</label>
     <div class="row">
-      <input id="ean" inputmode="numeric" placeholder="Digite ou escaneie o código">
+      <input id="ean" inputmode="numeric" placeholder="Digite ou escaneie o código" value="${d?d.ean:''}" oninput="salvarRascunhoRetirada()">
       <button class="btn-s btn-sm" style="flex:0 0 auto;" onclick="toggleScan()" id="btnCam">📷 Câmera</button>
     </div>
     <video id="scanbox" playsinline muted></video>
     <div id="pinfo"></div>
-    <label>Validade encontrada na embalagem</label><input id="rval" type="date" max="${hoje()}">
-    <label>Quantidade retirada</label><input id="rqtd" inputmode="numeric" placeholder="0">
-    <label>Motivo</label>
-    <select id="rmot">
-      <option>Vencido sem acompanhamento</option>
-      <option>Avariado</option>
-      <option>Impróprio para venda</option>
+    <label>Motivo da recolha</label>
+    <select id="rmot" onchange="toggleValidadeRetirada(); salvarRascunhoRetirada()">
+      <optgroup label="Vencimento">
+        <option value="Vencido sem acompanhamento" ${!d||d.motivo==='Vencido sem acompanhamento'?'selected':''}>Vencido sem acompanhamento</option>
+      </optgroup>
+      <optgroup label="Avaria / impróprio para venda">
+        ${["Avaria: embalagem danificada","Avaria: produto vazado","Avaria: quebrado","Avaria: amassado","Avaria: mofado","Avaria: outro"].map(m=>`<option value="${m}" ${d&&d.motivo===m?'selected':''}>${m.replace('Avaria: ','').replace(/^\w/,c=>c.toUpperCase())}${m==='Avaria: outro'?' (avaria)':''}</option>`).join("")}
+      </optgroup>
     </select>
-    <label>Fotos do comprovante (obrigatório, até 3)</label>
-    <input id="rfotos" type="file" accept="image/*" capture="environment" multiple>
+    <div id="rvalWrap" style="${d&&String(d.motivo).startsWith('Avaria:')?'display:none':''}">
+      <label>Validade encontrada na embalagem</label><input id="rval" type="date" max="${hoje()}" value="${d?d.val:''}" onchange="salvarRascunhoRetirada()">
+    </div>
+    <label>Quantidade retirada</label><input id="rqtd" inputmode="numeric" placeholder="0" value="${d?d.qtd:''}" oninput="salvarRascunhoRetirada()">
+    <label>Fotos do comprovante (obrigatório, até 3) — Câmera ou Galeria</label>
+    <input id="rfotos" type="file" accept="image/*" multiple>
+    <p class="muted" style="margin-top:4px;">Ao tocar, o celular oferece <b>Câmera</b> ou <b>Galeria</b>. Com pouca memória/bateria, prefira tirar as fotos antes e escolher pela Galeria.</p>
     <button class="btn-p" onclick="salvarRetirada()">Registrar retirada</button>
-    <button class="btn-s" onclick="go('calendario')">Voltar</button>
+    <button class="btn-s" onclick="limparRascunhoRetirada(); go('calendario')">Voltar</button>
   </div>`;
+}
+// Rascunho do formulário de recolha: sobrevive ao recarregamento da página
+// (Android fecha o navegador ao abrir a câmera com pouca memória/bateria).
+function lerRascunhoRetirada(){
+  try{ const r = JSON.parse(sessionStorage.getItem("dc_retirada_draft")||"null"); return r && (r.ean||r.qtd||r.val) ? r : null; }catch(e){ return null; }
+}
+function salvarRascunhoRetirada(){
+  try{
+    const g = id => (document.getElementById(id)||{}).value || "";
+    sessionStorage.setItem("dc_retirada_draft", JSON.stringify({
+      loja: sess.papel==="gestor" ? (lojaRetirada||"") : sess.loja,
+      ean: g("ean").trim(), motivo: g("rmot"), val: g("rval"), qtd: g("rqtd")
+    }));
+  }catch(e){}
+}
+function limparRascunhoRetirada(){ try{ sessionStorage.removeItem("dc_retirada_draft"); }catch(e){} }
+function toggleValidadeRetirada(){
+  const mot = document.getElementById("rmot"), wrap = document.getElementById("rvalWrap");
+  if(!mot || !wrap) return;
+  wrap.style.display = String(mot.value).startsWith("Avaria:") ? "none" : "";
 }
 async function salvarRetirada(){
   const ean = document.getElementById("ean").value.trim();
-  const val = document.getElementById("rval").value;
-  const qtd = parseFloat(document.getElementById("rqtd").value);
   const motivo = document.getElementById("rmot").value;
+  const ehAvaria = String(motivo).startsWith("Avaria:");
+  const val = ehAvaria ? (document.getElementById("rval").value || hoje()) : document.getElementById("rval").value;
+  const qtd = parseFloat(document.getElementById("rqtd").value);
   const files = [...(document.getElementById("rfotos").files||[])];
   const loja = sess.papel==="gestor" ? lojaRetirada : sess.loja;
   if(!loja) return alert("Escolha a loja onde o item foi retirado.");
   if(!ean) return alert("Informe o EAN do produto.");
-  if(!val) return alert("Informe a validade encontrada na embalagem.");
+  if(!ehAvaria && !val) return alert("Informe a validade encontrada na embalagem.");
   if(!(qtd>0)) return alert("Informe a quantidade retirada.");
   if(!files.length) return alert("Anexe pelo menos 1 foto como comprovante.");
   if(files.length>3) return alert("No máximo 3 fotos.");
@@ -680,7 +713,7 @@ async function salvarRetirada(){
     const pl = ploja(ean, loja) || (await sb.from("produtos_loja").select("*").eq("ean",ean).eq("loja",loja).maybeSingle()).data || {};
     const custo = Number(pl.ultimo_custo)||0;
     const valor = qtd*custo;
-    if(!confirm(`Registrar retirada sem acompanhamento?\n\n${prodAtual.descricao}\n${LOJAS[loja]} · ${qtd} un · validade ${fmtData(val)}\nMotivo: ${motivo}\nFotos: ${files.length}\n${custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Custo indisponível — sem lançamento ao fornecedor"}`)) { loading(false); return; }
+    if(!confirm(`Registrar recolha pela Prevenção?\n\n${prodAtual.descricao}\n${LOJAS[loja]} · ${qtd} un${ehAvaria?"":` · validade ${fmtData(val)}`}\nMotivo: ${motivo}\nFotos: ${files.length}\n${custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Custo indisponível — sem lançamento ao fornecedor"}`)) { loading(false); return; }
     // lote retroativo (contagem era zero — item não estava acompanhado)
     const {data:lote, error:eL} = await sb.from("lotes").insert({
       ean, loja, validade:val, qtd_inicial:qtd, qtd_restante:qtd,
@@ -713,6 +746,7 @@ async function salvarRetirada(){
       }, {onConflict:"lote_id,data"});
       if(eR) throw eR;
     }
+    limparRascunhoRetirada();
     alert("Retirada registrada"+(custo>0?` — ${brl(valor)} lançado ao fornecedor`:"")+". Comprovante com fotos arquivado.\n\nA loja não tinha acompanhado este item: a contagem ficou registrada como 0 → "+qtd+" retiradas pela Prevenção.");
     document.getElementById("ean").value=""; document.getElementById("rval").value="";
     document.getElementById("rqtd").value=""; document.getElementById("rfotos").value="";
@@ -1292,6 +1326,21 @@ async function registrarVenda(id){
 
 /* ================= VALIDAÇÃO DE DESCARTE (Prevenção) ================= */
 function comprimirImagem(file, maxDim=1280, qualidade=0.72){
+  // Caminho leve: o navegador reduz a foto JÁ na decodificação (usa muito menos memória
+  // em celulares fracos). Se não suportado, cai no caminho clássico abaixo.
+  if(window.createImageBitmap){
+    return createImageBitmap(file).then(bmp=>{
+      let w=bmp.width, h=bmp.height;
+      if(w>maxDim||h>maxDim){ const f=maxDim/Math.max(w,h); w=Math.round(w*f); h=Math.round(h*f); }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(bmp,0,0,w,h);
+      bmp.close && bmp.close();
+      return new Promise((res,rej)=>cv.toBlob(b=>b?res(b):rej(new Error("falha ao comprimir")),"image/jpeg",qualidade));
+    }).catch(()=>comprimirImagemClassico(file,maxDim,qualidade));
+  }
+  return comprimirImagemClassico(file,maxDim,qualidade);
+}
+function comprimirImagemClassico(file, maxDim=1280, qualidade=0.72){
   return new Promise((res, rej)=>{
     const img = new Image();
     img.onload = ()=>{
@@ -1317,7 +1366,14 @@ async function confirmarDescarte(loteId){
   const pl = ploja(l.ean,l.loja)||{};
   const custo = Number(pl.ultimo_custo)||0;
   const valor = qtd*custo;
-  if(!confirm(`Confirmar descarte?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nContado: ${Number(l.qtd_restante)} un · Validado: ${qtd} un\nFotos: ${files.length}\n${qtd>0&&custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Sem lançamento (qtd zero ou custo indisponível)"}`)) return;
+  let justificativa = null;
+  if(files.length===0){
+    justificativa = prompt("⚠️ Nenhuma foto anexada.\n\nTodo descarte deve ter foto comprovando. Se não for possível anexar agora, justifique por escrito (fica registrado com seu nome para auditoria):");
+    if(justificativa===null) return;
+    justificativa = justificativa.trim();
+    if(justificativa.length < 5) return alert("Justificativa muito curta. Descreva o motivo de não haver foto (mín. 5 caracteres) ou volte e anexe uma foto.");
+  }
+  if(!confirm(`Confirmar descarte?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nContado: ${Number(l.qtd_restante)} un · Validado: ${qtd} un\n${files.length?`Fotos: ${files.length}`:`SEM FOTO — justificativa: "${justificativa}"`}\n${qtd>0&&custo>0?`Lançamento ao fornecedor: ${brl(valor)}`:"Sem lançamento (qtd zero ou custo indisponível)"}`)) return;
   loading(true);
   try{
     const fotos = [];
@@ -1331,6 +1387,7 @@ async function confirmarDescarte(loteId){
     const {error:eD} = await sb.from("descartes").upsert({
       lote_id: loteId, qtd_contada: Number(l.qtd_restante), qtd_validada: qtd,
       fotos, status: "validado", validado_por: sess.nome,
+      justificativa_sem_foto: justificativa,
       validado_em: new Date().toISOString()
     }, {onConflict:"lote_id"});
     if(eD) throw eD;
