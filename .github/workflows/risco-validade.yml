@@ -1,0 +1,34 @@
+name: Risco de vencimento (recebimento -> App)
+
+# Projeta, a partir da validade digitada no recebimento, o que nao vai vender
+# antes de vencer e grava a tabela risco_validade (aba "Risco" do app).
+# Roda aqui no repo publico (Actions gratis). O log e publico: o script so
+# imprime contagens.
+
+on:
+  schedule:
+    # 06h50, 12h50 e 18h50 de Recife (UTC-3)
+    - cron: "50 9,15,21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: risco-validade
+  cancel-in-progress: false
+
+jobs:
+  risco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Calcular risco de vencimento
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+        run: python scripts/risco_validade.py
