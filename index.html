@@ -35,8 +35,8 @@
   .btn-danger{background:var(--danger); color:#fff;}
   .btn-sm{width:auto; padding:8px 14px; font-size:13px; margin-top:8px; margin-right:6px;}
   .row{display:flex; gap:10px;} .row>*{flex:1;}
-  nav{position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--line); display:flex; z-index:30;}
-  nav button{margin:0; border-radius:0; background:none; color:var(--mut); font-size:12px; font-weight:500; padding:10px 4px 12px; display:flex; flex-direction:column; align-items:center; gap:3px;}
+  nav{position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--line); display:flex; z-index:30; overflow-x:auto; scrollbar-width:none;}
+  nav button{margin:0; border-radius:0; background:none; color:var(--mut); font-size:12px; font-weight:500; padding:10px 4px 12px; display:flex; flex-direction:column; align-items:center; gap:3px; flex:1 0 auto; min-width:60px;}
   nav button.on{color:var(--navy); font-weight:700;}
   nav button .ic{font-size:20px; line-height:1;}
   .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; color:#fff;}
@@ -236,7 +236,7 @@ function renderNav(){
     return;
   }
   const nSug = window.__nSug ? " ("+window.__nSug+")" : "";
-  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["sugestoes","💡","Sugestões"+nSug,2],["placas","🖨","Placas",2],["gestor","📊","Gestão",3],["perdas","📉","Perdas",3],["fornec","💰","Fornec.",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
+  const tabs=[["contagem","📷","Contagem",1],["calendario","🗓","Calendário",2],["risco","⏳","Risco",2],["sugestoes","💡","Sugestões"+nSug,2],["placas","🖨","Placas",2],["gestor","📊","Gestão",3],["perdas","📉","Perdas",3],["fornec","💰","Fornec.",3],["cadastro","⚙️","Cadastro",3],["sair","⏻","Sair",1]];
   n.innerHTML = tabs.filter(t=>nivel(sess.papel)>=t[3])
     .map(t=>`<button class="${route.page===t[0]?'on':''}" onclick="${t[0]==='sair'?'logout()':`go('${t[0]}')`}"><span class="ic">${t[1]}</span>${t[2]}</button>`).join("");
 }
@@ -252,7 +252,7 @@ async function render(){
   renderNav();
   // proteção: rotas exclusivas do gestor
   const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet","perdas"];
-  const rotasPrev = ["calendario","placas","retirada","sugestoes"];
+  const rotasPrev = ["calendario","placas","retirada","sugestoes","risco"];
   if(sess){
     if(rotasGestor.includes(route.page) && nivel(sess.papel)<3){
       v.innerHTML='<div class="alertbox a-red">🔒 Acesso restrito. Esta área é exclusiva do gestor.</div>';
@@ -277,6 +277,7 @@ async function render(){
     else if(route.page==="fornhome"){ await carregarLotes(); await histTodos(); v.innerHTML = await vFornHome(); }
     else if(route.page==="gestor"){ await carregarLotes(); await histTodos(); await carregarSugestoes(); v.innerHTML = vGestor(); }
     else if(route.page==="itemdet"){ await carregarLotes(); await carregarSugestoes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
+    else if(route.page==="risco"){ v.innerHTML = '<div class="card center muted">Calculando o risco…</div>'; await vRisco(); }
     else if(route.page==="sugestoes"){ v.innerHTML = '<div class="card center muted">Carregando sugestões…</div>'; await vSugestoes(); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
@@ -612,6 +613,267 @@ async function resolver(id){
     if(error) throw error;
   }catch(e){ erroDB(e); }
   loading(false); render();
+}
+
+/* ============ RISCO DE VENCIMENTO (análise proativa pela validade do recebimento) ============ */
+// A tabela risco_validade é recalculada 3×/dia a partir do VR (scripts/risco_validade.py):
+// para cada lote recebido com validade, estoque atual × venda média diária → quanto NÃO vende antes
+// de vencer (validade − 5 dias). Aqui só lemos, filtramos e transformamos em lote com 1 toque.
+let rcLoja = "", rcFiltro = "agir", rcSecao = "", rcBusca = "", rcMax = 60;
+let rcCache = null;      // {linhas, ignorados:Set, abertos:{}, atualizado}
+function setRcLoja(v){ rcLoja = v; rcMax = 60; desenharRisco(); }
+function setRcFiltro(v){ rcFiltro = v; rcMax = 60; desenharRisco(); }
+function setRcSecao(v){ rcSecao = v; rcMax = 60; desenharRisco(); }
+function setRcBusca(v){ rcBusca = v; rcMax = 60; clearTimeout(window.__rcT); window.__rcT = setTimeout(desenharRisco, 250); }
+function rcMais(){ rcMax += 60; desenharRisco(); }
+
+async function sbTodos(montar){
+  // supabase devolve no máx. 1000 linhas por chamada — pagina até acabar
+  const out = [];
+  for(let ini=0; ; ini+=1000){
+    const {data, error} = await montar().range(ini, ini+999);
+    if(error) throw error;
+    out.push(...(data||[]));
+    if(!data || data.length < 1000) return out;
+  }
+}
+
+async function vRisco(){
+  const view = document.getElementById("view");
+  let linhas, ign = [], abertos = [], fb = [];
+  try{
+    const soLoja = nivel(sess.papel)<3 && sess.loja ? sess.loja : null;
+    linhas = await sbTodos(()=>{ let q = sb.from("risco_validade").select("*").order("dias");
+                                  return soLoja ? q.eq("loja", soLoja) : q; });
+    try{ ign = await sbTodos(()=>sb.from("risco_ignorados").select("ean")); }catch(e){ ign = []; }
+    try{
+      const corte = new Date(Date.now()-30*86400000).toISOString();
+      fb = await sbTodos(()=>{ let q = sb.from("risco_feedback").select("loja,secao,qtd_prevista,qtd_real").gte("conferido_em", corte);
+                               return soLoja ? q.eq("loja", soLoja) : q; });
+    }catch(e){ fb = []; }
+    abertos = await sbTodos(()=>{ let q = sb.from("lotes").select("id,ean,loja,validade").eq("resolvido",false);
+                                   return soLoja ? q.eq("loja", soLoja) : q; });
+  }catch(e){
+    const falta = /risco_validade|PGRST205|does not exist/i.test(e.message||"");
+    view.innerHTML = `<div class="alertbox a-red">${falta
+      ? "A tabela <b>risco_validade</b> ainda não existe no banco. Rode o <b>setup_risco_validade.sql</b> no Supabase e o cálculo \"Risco de vencimento\" no GitHub."
+      : "Não consegui ler o risco de vencimento: "+(e.message||e)}</div>`;
+    return;
+  }
+  const porProd = {};
+  abertos.forEach(l=>{ (porProd[l.ean+"|"+l.loja] = porProd[l.ean+"|"+l.loja] || []).push(l); });
+  linhas.forEach(x=>{ x.dias = diasAte(x.validade); });   // dias de hoje, não do horário do cálculo
+  rcCache = { linhas, ignorados: new Set(ign.map(x=>x.ean)), abertos: porProd, feedback: fb,
+              atualizado: linhas.reduce((m,x)=> x.atualizado_em > m ? x.atualizado_em : m, "") };
+  desenharRisco();
+}
+
+function rcConferir(x){ return !!(x.conferir_validade || x.estoque_suspeito); }
+function rcSazonal(x){ const m = new Date().getMonth(); return m>=9 && /BOMBONIERE/i.test(x.secao||""); }
+function taxaAcerto(){
+  const fb = (rcCache.feedback||[]).filter(f=>!rcLoja || f.loja===rcLoja);
+  if(!fb.length) return `<div class="muted" style="font-size:12px; margin-top:6px;">Taxa de acerto: ainda sem conferências. Cada "Acompanhar" registra o que a loja encontrou de fato.</div>`;
+  const ok = fb.filter(f=>Number(f.qtd_real) >= 0.5*Number(f.qtd_prevista)).length;
+  const pct = Math.round(ok/fb.length*100);
+  const cor = pct>=80 ? "var(--ok)" : pct>=60 ? "var(--warn)" : "var(--danger)";
+  return `<div style="font-size:13px; margin-top:6px;">Taxa de acerto (conferido na gôndola, 30 dias${rcLoja?" · "+rcLoja:""}):
+    <b style="color:${cor}">${pct}%</b> <span class="muted">— em ${ok} de ${fb.length} conferências a loja achou pelo menos metade do previsto</span></div>`;
+}
+function rcAcomp(x){
+  const ls = (rcCache.abertos[x.ean+"|"+x.loja] || []);
+  return ls.find(l=>l.validade===x.validade) || null;
+}
+
+function desenharRisco(){
+  const view = document.getElementById("view");
+  if(!rcCache) return;
+  const focoBusca = document.activeElement && document.activeElement.id==="rcBusca";
+  _desenharRisco(view);
+  if(focoBusca){ const i=document.getElementById("rcBusca"); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
+}
+function _desenharRisco(view){
+  const base = rcCache.linhas.filter(x=>!rcCache.ignorados.has(x.ean));
+  if(!base.length){
+    view.innerHTML = `<div class="card center"><div style="font-size:38px;">⏳</div>
+      <h2>Nenhum lote com risco projetado</h2>
+      <p class="muted">Pela validade digitada no recebimento, tudo o que está em estoque vende antes de vencer.
+      ${rcCache.atualizado ? "Cálculo de "+new Date(rcCache.atualizado).toLocaleString("pt-BR")+"." : "O cálculo ainda não rodou."}</p></div>`;
+    return;
+  }
+  const passa = (x, ignora) =>
+       (ignora==="loja"   || !rcLoja  || x.loja===rcLoja)
+    && (ignora==="filtro" || rcFiltro==="todos"
+        || (rcFiltro==="agir"     && x.urgente && !x.sem_venda && !rcConferir(x))
+        || (rcFiltro==="monitorar"&& !x.urgente && !x.sem_venda && !rcConferir(x))
+        || (rcFiltro==="conferir" && rcConferir(x) && !x.sem_venda)
+        || (rcFiltro==="semvenda" && x.sem_venda)
+        || (rcFiltro==="acomp"    && rcAcomp(x)))
+    && (ignora==="secao"  || !rcSecao || (x.secao||"(sem seção)")===rcSecao)
+    && (!rcBusca || (x.descricao||"").toLowerCase().includes(rcBusca.toLowerCase()) || String(x.ean).includes(rcBusca));
+  const vis = base.filter(x=>passa(x)).sort((a,b)=> rcFiltro==="todos" || rcFiltro==="agir"
+              ? (a.dias-b.dias) || (b.valor_risco-a.valor_risco) : (b.valor_risco-a.valor_risco));
+  const soma = arr => arr.reduce((s,x)=>s+Number(x.valor_risco||0),0);
+  const lojas = [...new Set(base.map(x=>x.loja))].sort();
+  const secoes = [...new Set(base.filter(x=>passa(x,"secao")).map(x=>x.secao||"(sem seção)"))].sort();
+  const chip = (txt, ativo, fn, n) =>
+    `<button class="chip ${ativo?'chip-on':''}" onclick="${fn}">${txt}${n!==undefined?` <span class="chip-n">${n}</span>`:""}</button>`;
+  const cnt = f => base.filter(x=>{ const s=rcFiltro; rcFiltro=f; const r=passa(x,"secao"); rcFiltro=s; return r; }).length;
+  const visAgir = vis.filter(x=>x.urgente && !x.sem_venda);
+  const nAcomp = vis.filter(x=>rcAcomp(x)).length;
+
+  view.innerHTML = `
+  <div class="card">
+    <h2>⏳ Risco de vencimento — pela validade do recebimento</h2>
+    <p class="muted">Cada lote recebido com validade × estoque atual × venda média diária. Aparece aqui o que,
+    no ritmo de hoje, <b>não vende até 5 dias antes de vencer</b> (em produto de vida curta a folga é 1/5 da vida útil). A urgência respeita a vida útil do produto:
+    iogurte entra cedo, arroz entra tarde.
+    ${rcCache.atualizado ? `<br>Cálculo de ${new Date(rcCache.atualizado).toLocaleString("pt-BR")} (roda 06h50, 12h50 e 18h50).` : ""}</p>
+    ${taxaAcerto()}
+    <div class="kpis" style="margin-top:10px;">
+      <div class="kpi red"><div class="v">${brl(soma(vis))}</div><div class="l">custo que vai sobrar<br>(neste filtro)</div></div>
+      <div class="kpi"><div class="v">${vis.length}</div><div class="l">lotes</div></div>
+      <div class="kpi"><div class="v">${nAcomp}</div><div class="l">já em<br>acompanhamento</div></div>
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+      ${chip("🔴 Agir agora", rcFiltro==="agir", "setRcFiltro('agir')", cnt("agir"))}
+      ${chip("🟡 Monitorar", rcFiltro==="monitorar", "setRcFiltro('monitorar')", cnt("monitorar"))}
+      ${chip("⚠️ Conferir validade/estoque", rcFiltro==="conferir", "setRcFiltro('conferir')", cnt("conferir"))}
+      ${chip("⚪ Sem venda", rcFiltro==="semvenda", "setRcFiltro('semvenda')", cnt("semvenda"))}
+      ${chip("👁 Já acompanhados", rcFiltro==="acomp", "setRcFiltro('acomp')", cnt("acomp"))}
+      ${chip("Todos", rcFiltro==="todos", "setRcFiltro('todos')", cnt("todos"))}
+    </div>
+    ${lojas.length>1 ? `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+      ${chip("Todas as lojas", !rcLoja, "setRcLoja('')")}
+      ${lojas.map(lj=>chip(lj, rcLoja===lj, `setRcLoja('${lj}')`, brl(soma(base.filter(x=>x.loja===lj && passa(x,"loja")))).replace(/,\d\d$/,""))).join("")}
+    </div>` : ""}
+    <div class="row" style="margin-top:8px;">
+      <select onchange="setRcSecao(this.value)">
+        <option value="">Todas as seções</option>
+        ${secoes.map(s=>`<option value="${s.replace(/"/g,'&quot;')}" ${s===rcSecao?"selected":""}>${s}</option>`).join("")}
+      </select>
+      <input id="rcBusca" type="search" placeholder="Buscar produto ou EAN" value="${rcBusca.replace(/"/g,'&quot;')}" oninput="setRcBusca(this.value)">
+    </div>
+    ${rcFiltro==="conferir" ? `<div class="alertbox" style="margin-top:8px; background:#FFF8E1; border:1px solid #FFE082; color:#6D4C00;">
+      Alertas que provavelmente são <b>erro de dado</b>, não de venda: validade muito diferente da que o produto costuma ter
+      (data digitada errada no recebimento) ou estoque do VR bem acima de tudo o que entrou nos últimos 90 dias.
+      Não entram em "Agir agora" — vale corrigir a origem.</div>` : ""}
+    ${rcFiltro==="semvenda" ? `<div class="alertbox" style="margin-top:8px; background:#FFF8E1; border:1px solid #FFE082; color:#6D4C00;">
+      Itens que entraram com validade mas <b>não venderam nada no PDV</b> em 90 dias. Pode ser item parado de verdade
+      — ou insumo que sai por produção/desossa (dianteiro, farinha da padaria). Esses use <b>"Não é venda de PDV"</b> para tirar da lista.</div>` : ""}
+  </div>
+  ${vis.length ? vis.slice(0, rcMax).map(x=>cardRisco(x)).join("")
+     + (vis.length>rcMax ? `<button class="btn-s" onclick="rcMais()">Mostrar mais (${vis.length-rcMax} restantes)</button>` : "")
+   : `<div class="card center muted">Nada neste filtro.</div>`}`;
+}
+
+function cardRisco(x){
+  const b = bucket(x.dias);
+  const idx = rcCache.linhas.indexOf(x);
+  const ac = rcAcomp(x);
+  const qtd = Number(x.qtd_lote), sobra = Number(x.sobra), vmd = Number(x.vmd);
+  const pctSobra = qtd>0 ? Math.round(sobra/qtd*100) : 100;
+  const vida = x.shelf ? Math.max(0, Math.round(x.dias/x.shelf*100)) : null;
+  const un = v => Number(v).toLocaleString("pt-BR",{maximumFractionDigits: v%1 ? 2 : 0});
+  const outros = (rcCache.abertos[x.ean+"|"+x.loja]||[]).filter(l=>l.validade!==x.validade);
+  return `
+  <div class="card" style="border-left:6px solid ${x.sem_venda?'#90A4AE':b.cor};">
+    <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:700; font-size:15px;">${badgeLoja(x.loja)}${x.descricao||x.ean}</div>
+        <div class="muted" style="font-size:12px;">${x.ean} · ${x.secao||"(sem seção)"} · entrou ${fmtData(x.entrada)}</div>
+      </div>
+      <div style="text-align:right; flex:none;">
+        <div style="font-size:18px; font-weight:800; color:var(--danger);">${brl(x.valor_risco)}</div>
+        <div class="muted" style="font-size:11px;">custo em risco</div>
+      </div>
+    </div>
+    <div style="margin:8px 0 4px;">
+      <span class="badge" style="background:${b.cor}">${x.dias<=0?"vence hoje":"vence em "+x.dias+" dias"}</span>
+      <span class="muted">${fmtData(x.validade)}${vida!==null?` · vida útil ${x.shelf} dias, restam ${vida}%`:""}</span>
+    </div>
+    <div style="font-size:14px; margin-top:6px;">Vai sobrar <b>${un(sobra)}</b> de ${un(qtd)} un deste lote (${pctSobra}%)</div>
+    <div style="height:8px; background:#E8EEF5; border-radius:4px; overflow:hidden; margin:4px 0 6px;">
+      <div style="height:100%; width:${pctSobra}%; background:${x.sem_venda?'#90A4AE':b.cor};"></div></div>
+    <div class="muted" style="font-size:12.5px;">
+      ${x.sem_venda ? "Sem venda no PDV nos últimos 90 dias."
+        : `Vende ${un(vmd.toFixed(vmd<1?2:1))}/dia · o lote leva ${x.dias_para_zerar!==null?un(Math.round(x.dias_para_zerar)):"—"} dias para zerar e tem ${Math.max(0,x.dias-(x.folga??JANELA_SEG))} até o limite (vencimento − ${x.folga??JANELA_SEG} dias)`}
+      · estoque da loja ${un(x.estoque)} · custo ${brl(x.custo)}</div>
+    ${x.conferir_validade ? `<div class="alertbox" style="margin:6px 0 0; padding:8px 10px; font-size:12.5px; background:#FFF8E1; border:1px solid #FFE082; color:#6D4C00;">
+      ⚠️ Vida útil deste lote: <b>${x.shelf} dias</b>; o normal deste produto é <b>${x.shelf_tipico} dias</b>. Confira a validade digitada no recebimento.</div>` : ""}
+    ${x.estoque_suspeito ? `<div class="alertbox" style="margin:6px 0 0; padding:8px 10px; font-size:12.5px; background:#FFF8E1; border:1px solid #FFE082; color:#6D4C00;">
+      ⚠️ Estoque do VR (${un(x.estoque)}) bem acima do que entrou nos últimos 90 dias. Confira o estoque da loja.</div>` : ""}
+    ${rcSazonal(x) ? `<div class="muted" style="font-size:12px; margin-top:4px;">🎄 Sazonal: a venda deve subir até o Natal — o risco existe se ela não subir.</div>` : ""}
+    ${outros.length ? `<div class="muted" style="font-size:12px; margin-top:4px;">Já existe lote aberto deste item na loja com validade ${outros.map(l=>fmtData(l.validade)).join(", ")}.</div>` : ""}
+    <div class="row" style="margin-top:8px; flex-wrap:wrap;">
+      ${ac ? `<span style="color:var(--ok); font-weight:700; align-self:center; flex:none;">✓ Em acompanhamento</span>
+              ${nivel(sess.papel)>=3?`<button class="btn-s btn-sm" style="flex:none;" onclick="go('itemdet','${ac.id}')">Abrir item</button>`:""}`
+           : `<button class="btn-p btn-sm" style="flex:none;" onclick="acompanharRisco(${idx})">👁 Acompanhar</button>`}
+      <button class="btn-s btn-sm" style="flex:none;" onclick="ignorarRisco(${idx})">Não é venda de PDV</button>
+    </div>
+  </div>`;
+}
+
+async function acompanharRisco(idx){
+  const x = rcCache.linhas[idx]; if(!x) return;
+  const sug = Number(x.qtd_lote);
+  const r = prompt(`Acompanhar ${x.descricao}\n${LOJAS[x.loja]} · validade ${fmtData(x.validade)}\n\n`+
+                   `Pelo recebimento devem existir ${sug.toLocaleString("pt-BR")} un deste lote na loja.\n`+
+                   `Confira na gôndola/depósito e informe a quantidade real.\n`+
+                   `Se não achar nada deste lote, informe 0 (fica registrado como alerta falso).`, String(sug));
+  if(r===null) return;
+  const qtd = parseFloat(String(r).replace(",","."));
+  if(!(qtd>=0) || isNaN(qtd)) return alert("Quantidade inválida.");
+  // o que a loja achou de fato × o previsto — é daqui que sai a taxa de acerto
+  try{
+    const f = {loja:x.loja, ean:x.ean, validade:x.validade, descricao:x.descricao, secao:x.secao,
+               qtd_prevista:sug, qtd_real:qtd, conferido_por:sess.nome, conferido_em:new Date().toISOString()};
+    await sb.from("risco_feedback").insert(f);
+    (rcCache.feedback = rcCache.feedback||[]).push(f);
+  }catch(e){ console.warn("feedback", e); }
+  if(qtd===0){ desenharRisco(); return alert("Registrado: a loja não encontrou este lote. Conta como alerta falso na taxa de acerto."); }
+  loading(true);
+  try{
+    const {data:ex} = await sb.from("lotes").select("id").eq("ean",x.ean).eq("loja",x.loja)
+      .eq("validade",x.validade).eq("resolvido",false).limit(1);
+    if(ex && ex.length){
+      loading(false);
+      rcCache.abertos[x.ean+"|"+x.loja] = [...(rcCache.abertos[x.ean+"|"+x.loja]||[]), {id:ex[0].id, ean:x.ean, loja:x.loja, validade:x.validade}];
+      desenharRisco();
+      return alert("Este lote já estava em acompanhamento.");
+    }
+    const {data:prod} = await sb.from("produtos").select("ean").eq("ean",x.ean).maybeSingle();
+    if(!prod){
+      const {error:ep} = await sb.from("produtos").upsert({ean:x.ean, id_produto:x.id_produto, descricao:x.descricao},{onConflict:"ean"});
+      if(ep) throw ep;
+    }
+    const {data:pl} = await sb.from("produtos_loja").select("preco_venda").eq("ean",x.ean).eq("loja",x.loja).maybeSingle();
+    const preco = pl && pl.preco_venda ? Number(pl.preco_venda) : (Number(x.preco)||null);
+    const {data:lote, error} = await sb.from("lotes").insert({
+      ean:x.ean, loja:x.loja, validade:x.validade, qtd_inicial:qtd, qtd_restante:qtd,
+      preco_atual:preco, criado_por:sess.id, criado_por_nome:sess.nome+" (risco do recebimento)"
+    }).select().single();
+    if(error) throw error;
+    if(preco) await sb.from("precos_hist").insert({lote_id:lote.id, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
+    rcCache.abertos[x.ean+"|"+x.loja] = [...(rcCache.abertos[x.ean+"|"+x.loja]||[]), {id:lote.id, ean:x.ean, loja:x.loja, validade:x.validade}];
+    loading(false);
+    desenharRisco();
+    alert(`Em acompanhamento: ${qtd} un, vence ${fmtData(x.validade)}. Já aparece no Calendário e na Gestão.`);
+  }catch(e){ loading(false); erroDB(e); }
+}
+
+async function ignorarRisco(idx){
+  const x = rcCache.linhas[idx]; if(!x) return;
+  const motivo = prompt(`Tirar "${x.descricao}" da análise de risco em TODAS as lojas?\n\n`+
+    `Use para itens que não saem pelo PDV (insumo de produção, desossa, uso interno).\nMotivo:`, "insumo de produção");
+  if(motivo===null) return;
+  loading(true);
+  try{
+    const {error} = await sb.from("risco_ignorados").upsert({ean:x.ean, descricao:x.descricao,
+      motivo, ignorado_por:sess.nome, ignorado_em:new Date().toISOString()},{onConflict:"ean"});
+    if(error) throw error;
+    rcCache.ignorados.add(x.ean);
+  }catch(e){ erroDB(e); }
+  loading(false); desenharRisco();
 }
 
 /* ============ RETIRADA SEM ACOMPANHAMENTO (Prevenção) ============ */
