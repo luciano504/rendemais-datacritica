@@ -609,7 +609,143 @@ function vCalendario(){
     <div>🚨 <b>Recolheu item vencido ou avariado que não estava acompanhado?</b><br><span style="font-size:12px;">Registre aqui com fotos — vira comprovante e lançamento ao fornecedor.</span></div>
     <button class="btn-sm" style="margin:0; padding:8px 12px; background:#E65100; color:#fff; border:none; border-radius:8px; font-size:12px; flex:0 0 auto;" onclick="go('retirada')">Recolher item</button>
   </div>`;
-  return btnRetirada + `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
+  const lojasConf = nivel(sess.papel)>=3 ? Object.keys(LOJAS) : [sess.loja];
+  const cardConf = `
+  <div class="card" style="padding:12px 16px;">
+    <details>
+      <summary style="cursor:pointer; font-weight:700; color:var(--navy);">🖨 Imprimir folha de conferência (PDF)</summary>
+      <p class="muted" style="margin:6px 0 8px;">Para a equipe da loja conferir no papel: produto, seção, validade e saldo, com espaço para anotar o que encontrou e a ação tomada.</p>
+      <label>Loja</label>
+      <select id="cfLoja">${lojasConf.length>1?'<option value="">Todas (uma folha por loja)</option>':''}${lojasConf.map(k=>`<option value="${k}">${LOJAS[k]}</option>`).join("")}</select>
+      <label>Itens que vencem em até</label>
+      <select id="cfDias"><option value="7">7 dias</option><option value="15" selected>15 dias</option><option value="30">30 dias</option><option value="60">60 dias</option></select>
+      <label style="display:flex; gap:8px; align-items:center; margin-top:10px;"><input type="checkbox" id="cfRisco" checked style="width:auto; margin:0;"> Incluir os itens da aba Risco (ainda sem acompanhamento)</label>
+      <button class="btn-p" style="margin-top:10px;" onclick="pdfConferencia()">Gerar PDF</button>
+    </details>
+  </div>`;
+  return btnRetirada + cardConf + `<h3 class="sec">Calendário ${nivel(sess.papel)>=3?"— todas as lojas":"— "+LOJAS[sess.loja]}</h3>`+html;
+}
+
+/* ================= FOLHA DE CONFERÊNCIA (PDF) ================= */
+async function pdfConferencia(){
+  if(!window.jspdf) return alert("Biblioteca de PDF ainda carregando — tente de novo em 2 segundos.");
+  const lojaSel = document.getElementById("cfLoja").value;
+  const horiz = Number(document.getElementById("cfDias").value)||15;
+  const comRisco = document.getElementById("cfRisco").checked;
+  const lojas = lojaSel ? [lojaSel] : (nivel(sess.papel)>=3 ? Object.keys(LOJAS) : [sess.loja]);
+  loading(true);
+  try{
+    let risco = [];
+    if(comRisco){
+      try{
+        risco = await sbTodos(()=>{ let q = sb.from("risco_validade").select("*").order("validade");
+                                     return lojaSel ? q.eq("loja", lojaSel) : (nivel(sess.papel)<3 ? q.eq("loja", sess.loja) : q); });
+        let ign = []; try{ ign = await sbTodos(()=>sb.from("risco_ignorados").select("ean")); }catch(e){}
+        const ignSet = new Set(ign.map(x=>x.ean));
+        const temLote = new Set(cache.lotes.map(l=>l.ean+"|"+l.loja+"|"+l.validade));
+        risco = risco.filter(x=>!ignSet.has(x.ean) && !temLote.has(x.ean+"|"+x.loja+"|"+x.validade) && diasAte(x.validade)>=0);
+      }catch(e){ risco = []; }
+    }
+    const desc = l => (l.produtos && l.produtos.descricao) || l.ean;
+    const sec  = l => (l.produtos && l.produtos.secao) || "";
+    const ord  = (a,b) => (a.sec||"").localeCompare(b.sec||"") || String(a.validade).localeCompare(String(b.validade)) || a.desc.localeCompare(b.desc);
+    const folhas = lojas.map(lj=>{
+      const meus = cache.lotes.filter(l=>l.loja===lj && !l.resolvido && Number(l.qtd_restante)>0);
+      const venc = meus.filter(l=>diasAte(l.validade)<0)
+        .map(l=>({desc:desc(l), ean:l.ean, sec:sec(l), validade:l.validade, saldo:Number(l.qtd_restante), preco:l.preco_atual})).sort(ord);
+      const prox = meus.filter(l=>!l.zerado && diasAte(l.validade)>=0 && diasAte(l.validade)<=horiz)
+        .map(l=>({desc:desc(l), ean:l.ean, sec:sec(l), validade:l.validade, saldo:Number(l.qtd_restante), preco:l.preco_atual})).sort(ord);
+      const rsc = risco.filter(x=>x.loja===lj)
+        .map(x=>({desc:x.descricao||x.ean, ean:x.ean, sec:x.secao||"", validade:x.validade, saldo:Number(x.qtd_lote)||Number(x.estoque)||0, preco:x.preco})).sort(ord);
+      return {lj, venc, prox, rsc};
+    }).filter(f=>f.venc.length || f.prox.length || f.rsc.length);
+    if(!folhas.length){ loading(false); return alert("Nenhum item para conferir com esse filtro."); }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({unit:"mm", format:"a4"});
+    const M = 10, W = 190, PH = 297;
+    const cols = [
+      {t:"Produto / EAN", w:55}, {t:"Seção", w:25}, {t:"Validade", w:17, c:1}, {t:"Dias", w:9, c:1},
+      {t:"Preço", w:16, r:1}, {t:"Saldo", w:12, c:1}, {t:"Encontrado", w:18, c:1}, {t:"", w:38}
+    ];
+    const navy = [14,42,71];
+    const emitido = new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+    let y = 0, pagLoja = "";
+
+    function cabecalho(lj){
+      doc.setFillColor(...navy); doc.rect(0,0,210,20,"F");
+      doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+      doc.text("Rende Mais · Folha de conferência de validade", M, 9);
+      doc.setFont("helvetica","normal"); doc.setFontSize(9);
+      doc.text(`${LOJAS[lj]||lj}  ·  emitida em ${emitido} por ${sess.nome}`, M, 15.5);
+      doc.setTextColor(0); y = 26;
+    }
+    function rodape(){
+      doc.setDrawColor(150); doc.setFontSize(8.5); doc.setTextColor(60);
+      const yb = PH-20;
+      doc.text("Conferido por: ______________________________   Assinatura: ____________________   Data: ____/____/______", M, yb);
+      doc.text("Gerente: ______________________________   Assinatura: ____________________", M, yb+7);
+      doc.setTextColor(0);
+    }
+    function novaPagina(lj){ rodape(); doc.addPage(); cabecalho(lj); }
+    function linhaCab(){
+      doc.setFillColor(232,236,242); doc.rect(M,y,W,6,"F");
+      doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(40);
+      let x = M;
+      cols.forEach(c=>{ const tx = c.c ? x+c.w/2 : (c.r ? x+c.w-1.5 : x+1.5);
+        doc.text(c.t, tx, y+4, {align: c.c?"center":(c.r?"right":"left")}); x += c.w; });
+      const xa = M+W-38; [["OK",3.6],["Rebaixar",17.6],["Retirar",31.6]].forEach(([t,dx])=>doc.text(t, xa+dx, y+4, {align:"center"}));
+      doc.setTextColor(0); y += 6;
+    }
+    function caixa(x,yy){ doc.setDrawColor(90); doc.rect(x, yy, 3.2, 3.2); }
+    function secao(lj, titulo, cor, itens, nota){
+      if(!itens.length) return;
+      if(y > PH-50) novaPagina(lj);
+      doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(...cor);
+      doc.text(`${titulo} (${itens.length})`, M, y+4); doc.setTextColor(0); y += 6;
+      if(nota){ doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90); doc.text(nota, M, y+2.5); doc.setTextColor(0); y += 4.5; }
+      linhaCab();
+      itens.forEach((it,i)=>{
+        doc.setFont("helvetica","normal"); doc.setFontSize(8);
+        const ls = doc.splitTextToSize(it.desc, cols[0].w-3).slice(0,2);
+        doc.setFontSize(7); const lsSec = doc.splitTextToSize(it.sec, cols[1].w-3).slice(0,2); doc.setFontSize(8);
+        const h = Math.max(ls.length, lsSec.length)*3.4 + 4.6;
+        if(y + h > PH-26){ novaPagina(lj); linhaCab(); doc.setFont("helvetica","normal"); doc.setFontSize(8); }
+        if(i%2) { doc.setFillColor(247,248,250); doc.rect(M,y,W,h,"F"); }
+        let x = M;
+        doc.text(ls, x+1.5, y+3.6);
+        doc.setFontSize(6.5); doc.setTextColor(110); doc.text(String(it.ean), x+1.5, y+3.6+ls.length*3.4); doc.setTextColor(0); doc.setFontSize(8);
+        x += cols[0].w;
+        doc.setFontSize(7); doc.text(lsSec, x+1.5, y+3.6); doc.setFontSize(8); x += cols[1].w;
+        const d = diasAte(it.validade);
+        doc.text(fmtData(it.validade), x+cols[2].w/2, y+3.6, {align:"center"}); x += cols[2].w;
+        doc.setFont("helvetica","bold"); doc.text(d<0?"venc.":String(d), x+cols[3].w/2, y+3.6, {align:"center"}); doc.setFont("helvetica","normal"); x += cols[3].w;
+        doc.text(it.preco?brl(it.preco):"—", x+cols[4].w-1.5, y+3.6, {align:"right"}); x += cols[4].w;
+        doc.text(String(it.saldo), x+cols[5].w/2, y+3.6, {align:"center"}); x += cols[5].w;
+        doc.setDrawColor(150); doc.line(x+3, y+h-1.6, x+cols[6].w-3, y+h-1.6); x += cols[6].w;
+        caixa(x+2, y+1.3); caixa(x+16, y+1.3); caixa(x+30, y+1.3);
+        doc.setDrawColor(225); doc.line(M, y+h, M+W, y+h);
+        y += h;
+      });
+      y += 4;
+    }
+
+    folhas.forEach((f,idx)=>{
+      if(idx) { rodape(); doc.addPage(); }
+      cabecalho(f.lj);
+      doc.setFontSize(8); doc.setTextColor(70);
+      doc.text("Confira cada item na gôndola e no depósito. Anote a quantidade encontrada e marque a ação. Devolva a folha assinada à Prevenção.", M, y);
+      doc.setTextColor(0); y += 4;
+      secao(f.lj, "Vencidos — retirar da gôndola hoje", [127,0,0], f.venc, "Separe na quarentena de avaria/vencido. A Prevenção valida o descarte com foto.");
+      secao(f.lj, `Vencem nos próximos ${horiz} dias — em acompanhamento`, navy, f.prox, "Confira o FEFO: o lote que vence primeiro fica na frente. Saldo = o que falta vender pelo app.");
+      secao(f.lj, "Risco — conferir validade e quantidade na gôndola", [180,90,0], f.rsc, "Itens que, pelo ritmo de venda, podem sobrar no vencimento. Saldo = quantidade do lote recebido.");
+    });
+    rodape();
+    const n = doc.getNumberOfPages();
+    for(let i=1;i<=n;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Página ${i} de ${n}`, 200, PH-6, {align:"right"}); }
+    doc.save(`conferencia_${lojaSel||(lojas.length>1?"todas":lojas[0])}_${hoje()}.pdf`);
+  }catch(e){ erroDB(e); }
+  loading(false);
 }
 async function resolver(id){
   loading(true);
