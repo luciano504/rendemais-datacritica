@@ -78,6 +78,24 @@
   .ress .v{font-size:22px; font-weight:800;}
   .ress .l{font-size:12px; opacity:.8;}
   #loader{position:fixed; inset:0; background:rgba(255,255,255,.7); display:none; align-items:center; justify-content:center; z-index:50; font-weight:700; color:var(--navy);}
+  /* radar da prevenção */
+  .rd-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px;}
+  .rd-card{background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px 14px; break-inside:avoid;}
+  .rd-card h4{margin:0; font-size:15px; color:var(--navy); display:flex; justify-content:space-between; align-items:baseline;}
+  .rd-card h4 span{font-size:22px;}
+  .rd-tab{width:100%; border-collapse:collapse; font-size:11.5px; margin-top:4px;}
+  .rd-tab td{padding:3px 4px; border-top:1px solid #EEF1F5;}
+  .rd-tab td.n{text-align:right; font-weight:700; white-space:nowrap;}
+  .rd-leg{display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--mut); margin:6px 0 10px;}
+  @media print{
+    body.print-radar header, body.print-radar nav, body.print-radar #loader{display:none !important;}
+    body.print-radar main > *:not(#radarSec){display:none !important;}
+    body.print-radar main{max-width:none; padding:0;}
+    body.print-radar, body.print-radar main{background:#fff !important;}
+    body.print-radar .rd-grid{grid-template-columns:repeat(2,1fr);}
+    body.print-radar .no-print{display:none !important;}
+    body{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  }
 </style>
 </head>
 <body>
@@ -1846,6 +1864,195 @@ async function confirmarDescarte(loteId){
 /* ============ ÍNDICE DE PREVENÇÃO DE PERDAS (Gestor) ============ */
 let perdasMes = null;
 function setPerdasMes(m){ perdasMes = m; render(); }
+/* ================= RADAR DA PREVENÇÃO (hexágono por loja) ================= */
+const RD_ANTEC_MIN = 10;   // dias de antecedência considerados suficientes para agir com rebaixa
+const RD_EIXOS = [
+  {k:"rebaixa", curto:"Rebaixa",          nome:"Rebaixa",            dica:"verba de rebaixa ÷ compras"},
+  {k:"antec",   curto:"Antecedência",     nome:"Antecedência do cadastro", dica:"% dos lotes que a LOJA cadastrou com 10 dias ou mais antes de vencer"},
+  {k:"usorisco",curto:"Uso do Risco",     nome:"Uso da aba Risco",   dica:"% dos itens 'agir agora' da aba Risco que a loja já pôs em acompanhamento"},
+  {k:"risco",   curto:"Risco a vencer",   nome:"Risco a vencer",     dica:"custo que vai sobrar (aba Risco, agir agora, ainda sem acompanhamento) ÷ compras"},
+  {k:"venc",    curto:"Vencidos",         nome:"Vencidos",           dica:"vencidas (com e sem acompanhamento) ÷ compras"},
+  {k:"detec",   curto:"Detecção",         nome:"Detecção da loja",   dica:"% do valor vencido que a loja já acompanhava"},
+  {k:"foto",    curto:"Foto no descarte", nome:"Descarte com foto",  dica:"% dos descartes validados com foto"},
+  {k:"balanco", curto:"Balanço",          nome:"Balanço",            dica:"diferença do balanço ÷ compras"}
+];
+const RD_PCT = new Set(["detec","foto","antec","usorisco"]);
+async function montarRadar(mes, porLoja, ress, descPorLote, balInf){
+  // risco de hoje (agir agora), por loja
+  let risco = [];
+  try{ risco = await sbTodos(()=>sb.from("risco_validade").select("loja,valor_risco,urgente,sem_venda,conferir_validade,estoque_suspeito")); }catch(e){ risco = []; }
+  // lotes abertos, para saber quais itens do Risco a loja já pôs em acompanhamento
+  let abertos = [];
+  try{ abertos = await sbTodos(()=>sb.from("lotes").select("ean,loja,validade").eq("resolvido",false)); }catch(e){ abertos = []; }
+  const temLote = new Set(abertos.map(l=>l.ean+"|"+l.loja+"|"+l.validade));
+  const riscoLoja = {}, usoRisco = {};
+  risco.filter(x=>x.urgente && !x.sem_venda && !x.conferir_validade && !x.estoque_suspeito).forEach(x=>{
+    const u = usoRisco[x.loja] || (usoRisco[x.loja] = {acomp:0, tot:0});
+    u.tot++;
+    if(temLote.has(x.ean+"|"+x.loja+"|"+x.validade)) u.acomp++;
+    else riscoLoja[x.loja] = (riscoLoja[x.loja]||0) + (Number(x.valor_risco)||0);
+  });
+  // antecedência do cadastro: lotes criados no mês PELA LOJA (operador), sem as recolhas retroativas
+  const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+  let lotesMes = [], papelDe = {};
+  try{
+    lotesMes = await sbTodos(()=>sb.from("lotes").select("loja,validade,criado_em,criado_por,criado_por_nome").gte("criado_em",ini).lt("criado_em",fim));
+    const us = await sbTodos(()=>sb.from("usuarios").select("id,papel"));
+    us.forEach(u=>{ papelDe[u.id] = u.papel; });
+  }catch(e){ lotesMes = []; }
+  const antecLoja = {};
+  lotesMes.forEach(l=>{
+    const papel = papelDe[l.criado_por];
+    if(papel && papel!=="operador") return;               // só o que a loja cadastrou
+    const dCad = String(l.criado_em).slice(0,10);
+    const dias = Math.round((new Date(l.validade+"T12:00") - new Date(dCad+"T12:00"))/86400000);
+    if(dias < 0) return;                                  // recolha de item já vencido não conta aqui
+    const a = antecLoja[l.loja] || (antecLoja[l.loja] = {dias:[], ok:0, viaRisco:0});
+    a.dias.push(dias); if(dias >= RD_ANTEC_MIN) a.ok++;
+    if(/risco do recebimento/i.test(l.criado_por_nome||"")) a.viaRisco++;
+  });
+  const mediana = arr => { if(!arr.length) return null; const v=[...arr].sort((x,y)=>x-y), m=Math.floor(v.length/2); return v.length%2 ? v[m] : (v[m-1]+v[m])/2; };
+  // descartes com foto, por loja (vencidas do mês)
+  const fotoLoja = {};
+  const vistos = new Set();
+  ress.filter(r=>Number(r.preco_vigente)===0).forEach(r=>{
+    if(vistos.has(r.lote_id)) return; vistos.add(r.lote_id);
+    const d = descPorLote[r.lote_id]; if(!d) return;
+    const f = fotoLoja[r.loja] || (fotoLoja[r.loja] = {com:0, tot:0});
+    f.tot++; if(Array.isArray(d.fotos) ? d.fotos.length : d.fotos) f.com++;
+  });
+  const lojas = Object.keys(LOJAS);
+  const L = lj => porLoja[lj] || {rebaixa:0,vencAcomp:0,vencSem:0,balanco:0,compras:0};
+  // valores crus por loja
+  const cru = {};
+  lojas.forEach(lj=>{
+    const d = L(lj), c = d.compras, venc = d.vencAcomp + d.vencSem, f = fotoLoja[lj], an = antecLoja[lj], ur = usoRisco[lj];
+    cru[lj] = {
+      compras: c,
+      rebaixa: c>0 ? d.rebaixa/c*100 : null,
+      venc:    c>0 ? venc/c*100 : null,
+      detec:   venc>0 ? d.vencAcomp/venc*100 : (c>0 ? 100 : null),
+      foto:    f && f.tot ? f.com/f.tot*100 : null,
+      risco:   c>0 ? (riscoLoja[lj]||0)/c*100 : null,
+      antec:   an && an.dias.length ? an.ok/an.dias.length*100 : null,
+      usorisco: ur && ur.tot ? ur.acomp/ur.tot*100 : null,
+      balanco: !balInf.has(lj) ? "sem" : (c>0 ? (Number(d.balanco)||0)/c*100 : null),
+      raw: {rebaixa:d.rebaixa, venc, risco:riscoLoja[lj]||0, balanco:d.balanco, foto:f, antec:an, med:an?mediana(an.dias):null, uso:ur}
+    };
+  });
+  // média da rede (ponderada pelas compras)
+  const soma = k => lojas.reduce((a,lj)=>a+(Number(L(lj)[k])||0),0);
+  const compR = soma("compras");
+  const vencR = soma("vencAcomp")+soma("vencSem");
+  const fotoR = Object.values(fotoLoja).reduce((a,f)=>({com:a.com+f.com, tot:a.tot+f.tot}),{com:0,tot:0});
+  const balLojas = lojas.filter(lj=>balInf.has(lj));
+  const compBal = balLojas.reduce((a,lj)=>a+L(lj).compras,0);
+  const rede = {
+    rebaixa: compR>0 ? soma("rebaixa")/compR*100 : null,
+    venc:    compR>0 ? vencR/compR*100 : null,
+    detec:   vencR>0 ? soma("vencAcomp")/vencR*100 : 100,
+    foto:    fotoR.tot ? fotoR.com/fotoR.tot*100 : null,
+    risco:   compR>0 ? Object.values(riscoLoja).reduce((a,b)=>a+b,0)/compR*100 : null,
+    balanco: compBal>0 ? balLojas.reduce((a,lj)=>a+(Number(L(lj).balanco)||0),0)/compBal*100 : null,
+    antec:   (()=>{ const t=Object.values(antecLoja).reduce((a,x)=>({ok:a.ok+x.ok, n:a.n+x.dias.length}),{ok:0,n:0}); return t.n ? t.ok/t.n*100 : null; })(),
+    usorisco:(()=>{ const t=Object.values(usoRisco).reduce((a,x)=>({ac:a.ac+x.acomp, n:a.n+x.tot}),{ac:0,n:0}); return t.n ? t.ac/t.n*100 : null; })()
+  };
+  // nota 0–100 (100 = melhor). Taxas de perda: 100 = zero, 50 = média da rede, 0 = o dobro da média.
+  const rel = (v, m) => v===null ? null : (m>0 ? Math.max(0, Math.min(100, 100 - 50*v/m)) : (v>0 ? 0 : 100));
+  const nota = (v, k) => {
+    if(k==="balanco" && v==="sem") return 0;
+    if(v===null || v===undefined) return null;
+    if(RD_PCT.has(k)) return Math.max(0, Math.min(100, v));
+    return rel(v, rede[k]);
+  };
+  const fmtP = v => (v===null||v===undefined) ? "—" : v.toLocaleString("pt-BR",{minimumFractionDigits:2, maximumFractionDigits:2})+"%";
+  const fmtI = v => (v===null||v===undefined) ? "—" : Math.round(v)+"%";
+  const txt = (k, v) => k==="balanco" && v==="sem" ? "sem balanço" : (RD_PCT.has(k) ? fmtI(v) : fmtP(v));
+  const corNota = n => n===null ? "#90A4AE" : n>=67 ? "#2E7D32" : n>=40 ? "#F9A825" : "#C62828";
+
+  // nota da rede em cada eixo (para o polígono pontilhado de referência)
+  const notaRede = {}; RD_EIXOS.forEach(e=>{ notaRede[e.k] = RD_PCT.has(e.k) ? (rede[e.k]===null?null:rede[e.k]) : (rede[e.k]===null?null:50); });
+
+  function hexSVG(notas, cor){
+    const W = 380, H = 250, cx = 190, cy = 125, R = 80;
+    const N = RD_EIXOS.length;
+    const ang = i => -Math.PI/2 + i*2*Math.PI/N;
+    const pt = (i, r) => [cx + r*Math.cos(ang(i)), cy + r*Math.sin(ang(i))];
+    const poly = vals => vals.map((v,i)=>pt(i, R*(v===null?0:v)/100).map(n=>n.toFixed(1)).join(",")).join(" ");
+    let g = "";
+    [25,50,75,100].forEach(p=>{ g += `<polygon points="${RD_EIXOS.map((e,i)=>pt(i,R*p/100).map(n=>n.toFixed(1)).join(",")).join(" ")}" fill="none" stroke="${p===100?"#B0BEC5":"#E3E8EE"}" stroke-width="1"/>`; });
+    RD_EIXOS.forEach((e,i)=>{ const [x,y]=pt(i,R); g += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#E3E8EE"/>`; });
+    const nr = RD_EIXOS.map(e=>notaRede[e.k]);
+    g += `<polygon points="${poly(nr)}" fill="none" stroke="#78909C" stroke-width="1.4" stroke-dasharray="4 3"/>`;
+    const nv = RD_EIXOS.map(e=>notas[e.k]);
+    g += `<polygon points="${poly(nv)}" fill="${cor}" fill-opacity="0.18" stroke="${cor}" stroke-width="2"/>`;
+    nv.forEach((v,i)=>{ if(v===null) return; const [x,y]=pt(i,R*v/100); g += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" fill="${corNota(v)}" stroke="#fff" stroke-width="1"/>`; });
+    RD_EIXOS.forEach((e,i)=>{
+      const [x,y] = pt(i, R+16);
+      const anc = Math.abs(x-cx)<4 ? "middle" : (x>cx ? "start" : "end");
+      const v = notas[e.k];
+      const topo = i===0, base = i===N/2;
+      g += `<text x="${x.toFixed(1)}" y="${(y+(topo?-4:base?10:-1)).toFixed(1)}" text-anchor="${anc}" font-size="11" font-weight="600" fill="#1F2D3D">${e.curto}</text>`;
+      g += `<text x="${x.toFixed(1)}" y="${(y+(topo?8:base?22:11)).toFixed(1)}" text-anchor="${anc}" font-size="10.5" font-weight="700" fill="${corNota(v)}">${v===null?"sem dado":Math.round(v)}</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:380px; display:block; margin:0 auto;" role="img" aria-label="Radar da prevenção">${g}</svg>`;
+  }
+
+  const cards = lojas.map(lj=>{
+    const c = cru[lj];
+    const notas = {}; RD_EIXOS.forEach(e=>{ notas[e.k] = nota(c[e.k], e.k); });
+    const validas = RD_EIXOS.map(e=>notas[e.k]).filter(v=>v!==null);
+    const geral = validas.length ? Math.round(validas.reduce((a,b)=>a+b,0)/validas.length) : null;
+    const fracos = RD_EIXOS.filter(e=>notas[e.k]!==null && notas[e.k]<40).map(e=>e.nome);
+    const leitura = !c.compras ? "Sem compras registradas no mês — índice não calculado."
+      : fracos.length ? `Atenção: ${fracos.join(", ")}.` : "Todos os aspectos na média da rede ou melhor.";
+    const linhas = RD_EIXOS.map(e=>{
+      let extra = "";
+      if(e.k==="rebaixa") extra = brl(c.raw.rebaixa);
+      if(e.k==="venc") extra = brl(c.raw.venc);
+      if(e.k==="risco") extra = brl(c.raw.risco);
+      if(e.k==="balanco" && c.balanco!=="sem") extra = brl(c.raw.balanco);
+      if(e.k==="foto" && c.raw.foto) extra = `${c.raw.foto.com} de ${c.raw.foto.tot}`;
+      if(e.k==="antec" && c.raw.antec) extra = `${c.raw.antec.ok} de ${c.raw.antec.dias.length} · mediana ${Math.round(c.raw.med)}d`;
+      if(e.k==="usorisco" && c.raw.uso) extra = `${c.raw.uso.acomp} de ${c.raw.uso.tot}`;
+      return `<tr title="${e.dica}"><td>${e.nome}</td><td class="n" style="color:#5A6B7D; font-weight:400;">${extra}</td><td class="n">${txt(e.k, c[e.k])}</td><td class="n" style="color:${corNota(notas[e.k])}">${notas[e.k]===null?"—":Math.round(notas[e.k])}</td></tr>`;
+    }).join("");
+    return `<div class="rd-card">
+      <h4>${LOJAS[lj]} <span style="color:${corNota(geral)}">${geral===null?"—":geral}</span></h4>
+      <div class="muted" style="font-size:11px;">nota geral (0 a 100) · compras ${c.compras?brl(c.compras):"—"}</div>
+      ${hexSVG(notas, LOJA_COR[lj]||"#0E2A47")}
+      <div style="font-size:12px; margin:2px 0 4px; color:${fracos.length?"#B71C1C":"#2E7D32"};">${leitura}</div>
+      <table class="rd-tab"><tr style="color:#5A6B7D;"><td>Aspecto</td><td class="n" style="font-weight:600;">R$ / qtd</td><td class="n" style="font-weight:600;">Valor</td><td class="n" style="font-weight:600;">Nota</td></tr>${linhas}</table>
+    </div>`;
+  }).join("");
+
+  const redeTab = RD_EIXOS.map(e=>`${e.nome}: <b>${txt(e.k, rede[e.k])}</b>`).join(" · ");
+  return `<div id="radarSec">
+    <h3 class="sec" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+      <span>Radar da prevenção por loja — ${mesLabel(mes)}</span>
+      <button class="btn-s btn-sm no-print" style="margin:0; width:auto;" onclick="imprimirRadar()">🖨 Imprimir / salvar PDF</button>
+    </h3>
+    <div class="card" style="padding:10px 14px;">
+      <div style="font-size:12.5px;">Cada ponta do gráfico é um aspecto da prevenção. <b>Quanto mais perto da borda, melhor.</b>
+      Nas quatro perdas (rebaixa, vencidos, risco e balanço) a nota compara a loja com a rede: 100 = perda zero, 50 = igual à média da rede, 0 = o dobro da média.
+      Nas outras quatro a nota é o próprio percentual: <b>Antecedência</b> = % dos lotes que a própria loja cadastrou com ${RD_ANTEC_MIN} dias ou mais antes de vencer (tempo de agir com rebaixa; a mediana de dias aparece na tabela);
+      <b>Uso do Risco</b> = % dos itens "agir agora" da aba Risco que a loja já pôs em acompanhamento; Detecção; e Descarte com foto. Loja sem balanço digitado no mês fica com nota 0 nesse eixo.</div>
+      <div class="rd-leg"><span><span style="display:inline-block; width:18px; border-top:2px solid #0E2A47; vertical-align:middle;"></span> a loja</span>
+        <span><span style="display:inline-block; width:18px; border-top:2px dashed #78909C; vertical-align:middle;"></span> média da rede</span>
+        <span style="color:#2E7D32;">● 67 ou mais</span><span style="color:#F9A825;">● 40 a 66</span><span style="color:#C62828;">● abaixo de 40</span></div>
+      <div style="font-size:11.5px; color:#5A6B7D;">Rede em ${mesLabel(mes)} — ${redeTab}. Uso do Risco e Risco a vencer são a foto de hoje (aba Risco, "agir agora").</div>
+    </div>
+    <div class="rd-grid">${cards}</div>
+  </div>`;
+}
+function imprimirRadar(){
+  document.body.classList.add("print-radar");
+  const fim = ()=>{ document.body.classList.remove("print-radar"); window.removeEventListener("afterprint", fim); };
+  window.addEventListener("afterprint", fim);
+  window.print();
+  setTimeout(fim, 1500);
+}
+
 async function vPerdas(){
   const view = document.getElementById("view");
   const mes = perdasMes || mesAtual();
@@ -1856,7 +2063,7 @@ async function vPerdas(){
       .select("lote_id,ean,loja,id_fornecedor,nome_fornecedor,valor,preco_vigente,qtd_vendida,data")
       .gte("data",ini).lt("data",fim);
     if(e1) throw e1;
-    const {data:descs} = await sb.from("descartes").select("lote_id,qtd_contada,qtd_validada").eq("status","validado");
+    const {data:descs} = await sb.from("descartes").select("lote_id,qtd_contada,qtd_validada,fotos").eq("status","validado");
     const descPorLote = {}; (descs||[]).forEach(d=>{ descPorLote[d.lote_id]=d; });
     const eans = [...new Set((ress||[]).map(r=>r.ean))];
     const secaoPorEan = {};
@@ -1918,6 +2125,9 @@ async function vPerdas(){
     }).join("");
     const identG = totG.rebaixa+totG.vencAcomp+totG.vencSem;
     const totalG = identG + totG.balanco;
+    let radarHTML = "";
+    try{ radarHTML = await montarRadar(mes, porLoja, ress||[], descPorLote, new Set((balancos||[]).map(b=>b.loja))); }
+    catch(e){ console.error(e); radarHTML = `<div class="alertbox a-red">Não consegui montar o radar: ${e.message||e}</div>`; }
 
     const fornOrd = Object.values(porForn).map(f=>({...f, perda:f.rebaixa+f.venc}))
       .filter(f=>f.perda>0.005).sort((a,b)=>b.perda-a.perda).slice(0,20);
@@ -1938,6 +2148,7 @@ async function vPerdas(){
     <div class="ress"><div><div class="l">Perda total da rede em ${mesLabel(mes)} ${totG.compras?("· "+pct(totalG,totG.compras)+" das compras"):""}</div><div class="v">${brl(totalG)}</div></div><div style="font-size:26px;">📉</div></div>
     ${semCompras?'<div class="alertbox" style="background:#FFF3CD; color:#8A6D0B; border:1px solid #FFE082;">⚠️ Tabela <b>compras_mes</b> ainda não existe no banco — rode o SQL de setup e aguarde o próximo sync para ver os percentuais sobre compras.</div>':""}
     ${semBalancos?'<div class="alertbox" style="background:#FFF3CD; color:#8A6D0B; border:1px solid #FFE082;">⚠️ Tabela <b>balancos</b> ainda não existe no banco — rode o SQL de setup para informar as perdas do balanço.</div>':""}
+    ${radarHTML}
     <h3 class="sec">Índice por loja — ${mesLabel(mes)}</h3>
     <div class="card" style="padding:8px; overflow-x:auto;">
       <table class="tperdas" style="width:100%; border-collapse:collapse; font-size:12px; min-width:680px;">
