@@ -1880,7 +1880,7 @@ const RD_PCT = new Set(["detec","foto","antec","usorisco"]);
 async function montarRadar(mes, porLoja, ress, descPorLote, balInf){
   // risco de hoje (agir agora), por loja
   let risco = [];
-  try{ risco = await sbTodos(()=>sb.from("risco_validade").select("loja,valor_risco,urgente,sem_venda,conferir_validade,estoque_suspeito")); }catch(e){ risco = []; }
+  try{ risco = await sbTodos(()=>sb.from("risco_validade").select("ean,loja,validade,valor_risco,urgente,sem_venda,conferir_validade,estoque_suspeito")); }catch(e){ risco = []; }
   // lotes abertos, para saber quais itens do Risco a loja já pôs em acompanhamento
   let abertos = [];
   try{ abertos = await sbTodos(()=>sb.from("lotes").select("ean,loja,validade").eq("resolvido",false)); }catch(e){ abertos = []; }
@@ -2059,11 +2059,11 @@ async function vPerdas(){
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
   try{
     // fontes
-    const {data:ress, error:e1} = await sb.from("ressarcimento_diario")
+    // paginado: o Supabase devolve no máximo 1000 linhas por chamada
+    const ress = await sbTodos(()=>sb.from("ressarcimento_diario")
       .select("lote_id,ean,loja,id_fornecedor,nome_fornecedor,valor,preco_vigente,qtd_vendida,data")
-      .gte("data",ini).lt("data",fim);
-    if(e1) throw e1;
-    const {data:descs} = await sb.from("descartes").select("lote_id,qtd_contada,qtd_validada,fotos").eq("status","validado");
+      .gte("data",ini).lt("data",fim).order("data").order("lote_id"));
+    let descs = []; try{ descs = await sbTodos(()=>sb.from("descartes").select("lote_id,qtd_contada,qtd_validada,fotos").eq("status","validado").order("lote_id")); }catch(e){ descs = []; }
     const descPorLote = {}; (descs||[]).forEach(d=>{ descPorLote[d.lote_id]=d; });
     const eans = [...new Set((ress||[]).map(r=>r.ean))];
     const secaoPorEan = {};
@@ -2072,7 +2072,7 @@ async function vPerdas(){
       (ps||[]).forEach(p=>{ secaoPorEan[p.ean]=p.secao||"(sem seção)"; });
     }
     let compras = [], balancos = [], semCompras = false, semBalancos = false;
-    try{ const r = await sb.from("compras_mes").select("*").eq("mes",mes); if(r.error) throw r.error; compras = r.data||[]; }catch(e){ semCompras = true; }
+    try{ compras = await sbTodos(()=>sb.from("compras_mes").select("*").eq("mes",mes).order("loja").order("id_fornecedor").order("secao")); }catch(e){ semCompras = true; }
     try{ const r = await sb.from("balancos").select("*").eq("mes",mes); if(r.error) throw r.error; balancos = r.data||[]; }catch(e){ semBalancos = true; }
 
     // agregações
