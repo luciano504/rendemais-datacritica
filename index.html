@@ -234,10 +234,19 @@ function vrItem(l, preco, pl){
     qtd_limite: rebaixa && Number(l.qtd_restante) > 0 ? Number(l.qtd_restante) : undefined,
     descricao: (l.produtos && l.produtos.descricao) || l.ean, ref: "dc:" + l.id + ":" + preco };
 }
+/* chave "mudar também no VR": ligada por padrão; desligada = digitar no VR à mão (vale para este aparelho) */
+const vrAuto = ()=>{ try{ return localStorage.getItem("dc_vr_auto") !== "0"; }catch(e){ return true; } };
+function vrSetAuto(on){ try{ localStorage.setItem("dc_vr_auto", on ? "1" : "0"); }catch(e){} document.querySelectorAll(".vr-auto").forEach(c=>c.checked=on); }
+function vrToggle(){
+  if(!sess || sess.papel === "fornecedor") return "";
+  return `<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px;cursor:pointer;">
+    <input type="checkbox" class="vr-auto" ${vrAuto()?"checked":""} onchange="vrSetAuto(this.checked)" style="width:18px;height:18px;">
+    <span><b>Mudar também no VR</b> — desmarque para digitar no VR à mão (o item vai para o relatório da equipe de apoio)</span></label>`;
+}
 /* devolve true se saiu da página rumo ao VR */
 function vrIr(itens){
   itens = (itens||[]).filter(Boolean);
-  if(!sess || sess.papel === "fornecedor" || !itens.length) return false;
+  if(!sess || sess.papel === "fornecedor" || !itens.length || !vrAuto()) return false;
   /* mesmo item na mesma loja (vários lotes): uma oferta só, menor preço, soma das quantidades */
   const g = {};
   itens.forEach(x=>{ const k = x.ean+"|"+x.id_loja, a = g[k];
@@ -1465,6 +1474,7 @@ function vItem(id){
       <input id="novoPreco" type="number" step="0.01" value="${sug.preco.toFixed(2)}">
       <button class="btn-p btn-sm" style="flex:0 0 auto; margin-top:0; padding:12px 18px;" onclick="aplicarPreco('${l.id}')">Aplicar</button>
     </div>
+    ${vrToggle()}
     <p class="muted" style="margin-top:6px;">Ao aplicar, o item entra no relatório da equipe de apoio.</p>`:""}
     ${l.preco_atual && pn && Number(l.preco_atual)<pn?`<button class="btn-s" onclick="voltarNormal('${l.id}')">Voltar ao preço normal (${brl(pn)})</button>`:""}
     ${!l.analisado_em ? `<button class="btn-ok" onclick="marcarAnalisado('${l.id}')">✓ Manter preço · análise concluída</button>
@@ -1489,6 +1499,7 @@ function vItem(id){
     <p style="font-size:15px; margin:6px 0;"><b>${s.nome_fornecedor||"Fornecedor"}</b> sugere rebaixar para
       <span style="font-size:22px; font-weight:800; color:#1565C0;">${brl(s.preco)}</span></p>
     <p class="muted">Por ${s.sugerido_por||"?"} em ${fmtData(s.criado_em)}. Nada muda sem a sua decisão.</p>
+    ${vrToggle()}
     <div class="row">
       <button class="btn-ok" onclick="aceitarSugestao(${s.id},'${l.id}',${s.preco})">✓ Aceitar e aplicar</button>
       <button class="btn-s" onclick="recusarSugestao(${s.id})">Recusar</button>
@@ -1623,6 +1634,7 @@ async function vSugestoes(){
       <button class="btn-ok" onclick="aceitarSelecionadas()">✓ Aceitar selecionadas</button>
       <button class="btn-s" onclick="recusarSelecionadas()">Recusar selecionadas</button>
     </div>
+    ${vrToggle()}
   </div>
 
   ${vis.length ? vis.map(x=>{
