@@ -208,6 +208,66 @@ function precoNormal(lote){
   const pl = ploja(lote.ean, lote.loja);
   return pl && pl.preco_venda ? Number(pl.preco_venda) : Number(lote.preco_atual)||0;
 }
+/* ---------- preço no VR com um clique (22/10/2026) ----------
+   O Data Crítica é https e o servidor do VR é http: o navegador não deixa um chamar o
+   outro direto. Então o clique abre uma janelinha do próprio servidor do VR
+   (precos_enviar.html), que pede a senha de preços se a liberação de 15 min venceu,
+   envia pela fila do precos_vr.php (log com responsável) e fecha sozinha.
+   Rebaixa = oferta no VR de hoje até o vencimento; voltar ao normal = oferta ao
+   preço cheio só até hoje (amanhã o VR já está no normal). */
+const VR_ORIG = "http://rendemaisdns.zapto.org:8086";
+const VR_URL  = VR_ORIG + "/teste/precos_enviar.html";
+const vrPend = { win:null, pronto:false, msg:null };
+function vrAbrir(){
+  if(!sess || sess.papel === "fornecedor") return false;
+  try{ vrPend.win = window.open(VR_URL, "precosVR", "width=480,height=600"); }catch(e){ vrPend.win = null; }
+  vrPend.pronto = false; vrPend.msg = null;
+  if(vrPend.win){
+    const w = vrPend.win;
+    clearTimeout(vrPend.t);
+    vrPend.t = setTimeout(()=>{   // a janela não respondeu: servidor do VR fora do ar ou sem a página
+      if(vrPend.win === w && !vrPend.pronto){
+        try{ w.close(); }catch(e){}
+        vrPend.win = null;
+        alert("⚠ Não consegui falar com o servidor do VR. O preço mudou só no Data Crítica — no VR continua o anterior.");
+      }
+    }, 15000);
+  }
+  if(!vrPend.win) alert("O navegador bloqueou a janela do VR. Libere os pop-ups deste site (ícone na barra de endereço) para o preço mudar no VR.");
+  return !!vrPend.win;
+}
+function vrTentar(){
+  if(!vrPend.win || !vrPend.pronto || !vrPend.msg) return;
+  try{ vrPend.win.postMessage(Object.assign({precosVR:true}, vrPend.msg), VR_ORIG); }catch(e){}
+  vrPend.msg = null;
+}
+function vrMandar(itens){ itens = (itens||[]).filter(Boolean); if(!vrPend.win) return; vrPend.msg = itens.length ? {itens} : {cancelar:true}; vrTentar(); }
+function vrCancelar(){ if(vrPend.win){ vrPend.msg = {cancelar:true}; vrTentar(); } }
+window.addEventListener("message", ev=>{
+  if(ev.origin !== VR_ORIG || !ev.data || !ev.data.precosVR) return;
+  if(ev.data.pronto){ vrPend.pronto = true; vrTentar(); return; }
+  if(ev.data.ok === false && !ev.data.cancelado)
+    alert("⚠ O preço foi gravado no Data Crítica, mas NÃO mudou no VR:\n\n" + (ev.data.erro || ev.data.resumo || ""));
+  if(ev.data.cancelado)
+    alert("Envio ao VR cancelado: o preço mudou só no Data Crítica. No VR continua o anterior.");
+});
+const hojeISO = ()=>{ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+/* item da fila do VR para um lote; pl = produtos_loja (quando a tela já tem) */
+function vrItem(l, preco, pl){
+  if(!l) return null;
+  pl = pl || ploja(l.ean, l.loja) || {};
+  const cheio = Math.max(Number(pl.preco_cheio)||0, cache.hist[l.id] ? precoNormal(l) : 0, Number(pl.preco_venda)||0);
+  const hoje = hojeISO(), lj = Number(String(l.loja||"").replace(/\D/g,""));
+  if(!lj || !(preco > 0)) return null;
+  const rebaixa = cheio > 0 && preco < cheio - 0.004;
+  if(rebaixa && String(l.validade) < hoje) return null;     // já venceu: não há o que ofertar
+  if(!rebaixa && !(cheio > 0)) return null;
+  return { tipo:"oferta", ean:String(l.ean), id_loja:lj,
+    preco: rebaixa ? preco : cheio, preconormal: cheio > 0 ? cheio : undefined,
+    datainicio: hoje, datatermino: rebaixa ? String(l.validade).slice(0,10) : hoje,
+    descricao: (l.produtos && l.produtos.descricao) || l.ean, ref: "dc:" + l.id + ":" + preco };
+}
+
 function sugestaoPreco(lote){
   const dias = diasAte(lote.validade), janela = Math.max(dias-JANELA_SEG,0);
   const vd = vendaDiaria(lote), rest = Number(lote.qtd_restante);
@@ -1618,9 +1678,10 @@ async function aceitarSelecionadas(){
   const abaixo = sel.filter(s=>{ const x = sugCache.find(y=>y.s.id===s.id); return x && x.abaixoCusto; });
   let aviso = `Aplicar ${sel.length} preço(s) sugerido(s) e marcar como aceitos?`;
   if(abaixo.length) aviso += `\n\nATENÇÃO: ${abaixo.length} está(ão) abaixo do último custo.`;
-  if(!confirm(aviso)) return;
+  const vr = vrAbrir();
+  if(!confirm(aviso)){ vrCancelar(); return; }
   loading(true);
-  let ok=0, falhas=[];
+  let ok=0, falhas=[]; const itensVR=[];
   for(const s of sel){
     try{
       const {error} = await sb.from("lotes").update({preco_atual:s.preco, pend_apoio:true,
@@ -1631,8 +1692,11 @@ async function aceitarSelecionadas(){
       await sb.from("sugestoes_fornecedor").update({status:"aceita",
         respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id", s.id);
       ok++;
+      const x = sugCache.find(y=>y.s.id===s.id);
+      if(x) itensVR.push(vrItem(x.l, s.preco, x.pl));
     }catch(e){ falhas.push(s.id); }
   }
+  if(vr) vrMandar(itensVR);
   loading(false);
   alert(`${ok} sugestão(ões) aceita(s) e preço aplicado.`
         + (falhas.length? `\n${falhas.length} falhou(ram) — tente de novo.` : ""));
@@ -1662,16 +1726,19 @@ async function aceitarSugestao(sugId, loteId, preco){
   // a aba de sugestões não carrega cache.lotes; usa o contexto que ela já buscou
   const daAba = (typeof sugCache!=="undefined" && sugCache.find(x=>x.s.id===sugId)) || null;
   const custo = l ? (ploja(l.ean,l.loja)||{}).ultimo_custo : (daAba ? daAba.custo : 0);
-  if(custo && preco<Number(custo) && !confirm("Preço sugerido está abaixo do custo ("+brl(custo)+"). Aceitar mesmo assim?")) return;
-  if(!confirm(`Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`)) return;
+  const vr = vrAbrir();
+  if(custo && preco<Number(custo) && !confirm("Preço sugerido está abaixo do custo ("+brl(custo)+"). Aceitar mesmo assim?")){ vrCancelar(); return; }
+  if(!confirm(`Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`)){ vrCancelar(); return; }
+  const itemVR = vrItem(l || (daAba && daAba.l), preco, daAba ? daAba.pl : null);
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:preco, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",loteId);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:loteId, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (sug. fornecedor)"});
     await sb.from("sugestoes_fornecedor").update({status:"aceita", respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id",sugId);
-    alert("Sugestão aceita — preço aplicado e item no relatório da equipe de apoio.");
-  }catch(e){ erroDB(e); }
+    if(vr) vrMandar([itemVR]);
+    if(!vr) alert("Sugestão aceita — preço aplicado no Data Crítica e item no relatório da equipe de apoio.");
+  }catch(e){ vrCancelar(); erroDB(e); }
   loading(false); render();
 }
 async function recusarSugestao(sugId){
@@ -1754,24 +1821,30 @@ async function aplicarPreco(id){
   const np=parseFloat(document.getElementById("novoPreco").value);
   if(!(np>0)) return alert("Preço inválido.");
   const custo = (ploja(l.ean,l.loja)||{}).ultimo_custo;
-  if(custo && np<Number(custo) && !confirm("Preço abaixo do custo ("+brl(custo)+"). Confirmar mesmo assim?")) return;
+  const vr = vrAbrir();   // abre já no clique, senão o navegador bloqueia
+  if(custo && np<Number(custo) && !confirm("Preço abaixo do custo ("+brl(custo)+"). Confirmar mesmo assim?")){ vrCancelar(); return; }
+  const itemVR = vrItem(l, np);
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:np, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:np, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
-    alert("Preço aplicado. Item adicionado ao relatório da equipe de apoio.");
-  }catch(e){ erroDB(e); }
+    if(vr) vrMandar([itemVR]);
+    if(!vr) alert("Preço aplicado no Data Crítica. Item adicionado ao relatório da equipe de apoio.");
+  }catch(e){ vrCancelar(); erroDB(e); }
   loading(false); render();
 }
 async function voltarNormal(id){
   const l=cache.lotes.find(x=>x.id===id), pn=precoNormal(l);
+  const vr = vrAbrir();
+  const itemVR = vrItem(l, pn);
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:pn, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
-  }catch(e){ erroDB(e); }
+    if(vr) vrMandar([itemVR]);
+  }catch(e){ vrCancelar(); erroDB(e); }
   loading(false); render();
 }
 async function registrarVenda(id){
