@@ -1,0 +1,35 @@
+name: Preços no VR — relógio (5 min)
+
+# Chama o servidor de preços do VR a cada 5 minutos. A chamada "status" do
+# precos_vr.php executa as alterações que já chegaram na data (todas liberadas
+# antes com senha) e encerra a rebaixa do Data Crítica quando a quantidade do
+# lote foi vendida. Não leva senha nem chave: o endpoint só executa o que já
+# estava autorizado. O GitHub pode atrasar rotinas agendadas em alguns minutos.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: precos-vr-relogio
+  cancel-in-progress: false
+
+jobs:
+  relogio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Chamar o servidor de preços
+        run: |
+          resp=$(curl -sS --max-time 90 "http://rendemaisdns.zapto.org:8086/teste/precos_vr.php?acao=status" || true)
+          ok=$(echo "$resp" | python3 -c 'import sys,json
+          try:
+              d=json.load(sys.stdin); print("ok" if d.get("ok") else "erro")
+          except Exception: print("sem resposta")')
+          pend=$(echo "$resp" | python3 -c 'import sys,json
+          try: print(json.load(sys.stdin).get("pendentes","?"))
+          except Exception: print("?")')
+          echo "### Preços no VR — $(TZ=America/Recife date '+%d/%m %H:%M')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Servidor: $ok · agendados aguardando a data: $pend" >> "$GITHUB_STEP_SUMMARY"
+          echo "Servidor: $ok · pendentes: $pend"
