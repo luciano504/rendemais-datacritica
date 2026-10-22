@@ -230,12 +230,23 @@ function vrItem(l, preco, pl){
   return { tipo:"oferta", ean:String(l.ean), id_loja:lj,
     preco: rebaixa ? preco : cheio, preconormal: cheio > 0 ? cheio : undefined,
     datainicio: hoje, datatermino: rebaixa ? String(l.validade).slice(0,10) : hoje,
+    // rebaixa vale até o vencimento OU até vender a quantidade do lote, o que vier primeiro
+    qtd_limite: rebaixa && Number(l.qtd_restante) > 0 ? Number(l.qtd_restante) : undefined,
     descricao: (l.produtos && l.produtos.descricao) || l.ean, ref: "dc:" + l.id + ":" + preco };
 }
 /* devolve true se saiu da página rumo ao VR */
 function vrIr(itens){
   itens = (itens||[]).filter(Boolean);
   if(!sess || sess.papel === "fornecedor" || !itens.length) return false;
+  /* mesmo item na mesma loja (vários lotes): uma oferta só, menor preço, soma das quantidades */
+  const g = {};
+  itens.forEach(x=>{ const k = x.ean+"|"+x.id_loja, a = g[k];
+    if(!a){ g[k] = {...x}; return; }
+    a.ref += " " + x.ref;
+    if(x.preco < a.preco) a.preco = x.preco;
+    if(x.datatermino > a.datatermino) a.datatermino = x.datatermino;
+    a.qtd_limite = (a.qtd_limite && x.qtd_limite) ? a.qtd_limite + x.qtd_limite : undefined; });
+  itens = Object.values(g);
   try{ localStorage.setItem("dc_vr_volta", JSON.stringify({page:route.page, param:route.param, em:Date.now()})); }catch(e){}
   const volta = location.origin + location.pathname;
   location.href = VR_URL + "#" + encodeURIComponent(JSON.stringify({ itens, volta }));
