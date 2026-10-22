@@ -57,3 +57,20 @@ jobs:
           else
             echo "scripts/expandir_fornecedores.py ainda nao esta no pipeline."
           fi
+
+      # Rebaixa que passou da quantidade do lote no VR até o preço voltar ao normal:
+      # o excedente também é cobrado do fornecedor (regra de 22/10/2026).
+      - name: Baixar este repo (script do excedente)
+        if: always()
+        uses: actions/checkout@v4
+        with:
+          path: dc
+          persist-credentials: false
+
+      - name: Cobrar do fornecedor o excedente da rebaixa no VR
+        if: always()
+        continue-on-error: true
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python dc/scripts/excedente_rebaixa_vr.py
