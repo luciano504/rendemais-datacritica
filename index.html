@@ -745,7 +745,8 @@ async function pdfConferencia(){
         let ign = []; try{ ign = await sbTodos(()=>sb.from("risco_ignorados").select("ean")); }catch(e){}
         const ignSet = new Set(ign.map(x=>x.ean));
         const temLote = new Set(cache.lotes.map(l=>l.ean+"|"+l.loja+"|"+l.validade));
-        risco = risco.filter(x=>!ignSet.has(x.ean) && !temLote.has(x.ean+"|"+x.loja+"|"+x.validade) && diasAte(x.validade)>=0);
+        const trat = await rcTratados(lojaSel || (nivel(sess.papel)<3 ? sess.loja : null));
+        risco = risco.filter(x=>!ignSet.has(x.ean) && !temLote.has(rcChave(x)) && !trat.has(rcChave(x)) && diasAte(x.validade)>=0);
       }catch(e){ risco = []; }
     }
     const desc = l => (l.produtos && l.produtos.descricao) || l.ean;
@@ -804,9 +805,28 @@ async function sbTodos(montar){
   }
 }
 
+// Itens do Risco que a loja já tratou: conferiu e não achou (informou 0, inclusive item transformado em outro)
+// ou pôs em acompanhamento e o lote já foi encerrado. Chave ean|loja|validade.
+async function rcTratados(soLoja){
+  const out = new Set();
+  try{
+    const z = await sbTodos(()=>{ let q = sb.from("risco_feedback").select("ean,loja,validade").eq("qtd_real",0);
+                                  return soLoja ? q.eq("loja", soLoja) : q; });
+    z.forEach(f=>out.add(f.ean+"|"+f.loja+"|"+f.validade));
+  }catch(e){ console.warn("tratados/feedback", e); }
+  try{
+    const corte = new Date(Date.now()-120*86400000).toISOString().slice(0,10);
+    const r = await sbTodos(()=>{ let q = sb.from("lotes").select("ean,loja,validade").eq("resolvido",true).gte("validade", corte);
+                                  return soLoja ? q.eq("loja", soLoja) : q; });
+    r.forEach(l=>out.add(l.ean+"|"+l.loja+"|"+l.validade));
+  }catch(e){ console.warn("tratados/lotes", e); }
+  return out;
+}
+function rcChave(x){ return x.ean+"|"+x.loja+"|"+x.validade; }
+
 async function vRisco(){
   const view = document.getElementById("view");
-  let linhas, ign = [], abertos = [], fb = [];
+  let linhas, ign = [], abertos = [], fb = [], tratados = new Set();
   try{
     const soLoja = nivel(sess.papel)<3 && sess.loja ? sess.loja : null;
     linhas = await sbTodos(()=>{ let q = sb.from("risco_validade").select("*").order("dias");
@@ -819,6 +839,7 @@ async function vRisco(){
     }catch(e){ fb = []; }
     abertos = await sbTodos(()=>{ let q = sb.from("lotes").select("id,ean,loja,validade").eq("resolvido",false);
                                    return soLoja ? q.eq("loja", soLoja) : q; });
+    tratados = await rcTratados(soLoja);
   }catch(e){
     const falta = /risco_validade|PGRST205|does not exist/i.test(e.message||"");
     view.innerHTML = `<div class="alertbox a-red">${falta
@@ -829,7 +850,7 @@ async function vRisco(){
   const porProd = {};
   abertos.forEach(l=>{ (porProd[l.ean+"|"+l.loja] = porProd[l.ean+"|"+l.loja] || []).push(l); });
   linhas.forEach(x=>{ x.dias = diasAte(x.validade); });   // dias de hoje, não do horário do cálculo
-  rcCache = { linhas, ignorados: new Set(ign.map(x=>x.ean)), abertos: porProd, feedback: fb,
+  rcCache = { linhas, ignorados: new Set(ign.map(x=>x.ean)), abertos: porProd, feedback: fb, tratados,
               atualizado: linhas.reduce((m,x)=> x.atualizado_em > m ? x.atualizado_em : m, "") };
   desenharRisco();
 }
@@ -858,7 +879,7 @@ function desenharRisco(){
   if(focoBusca){ const i=document.getElementById("rcBusca"); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
 }
 function _desenharRisco(view){
-  const base = rcCache.linhas.filter(x=>!rcCache.ignorados.has(x.ean));
+  const base = rcCache.linhas.filter(x=>!rcCache.ignorados.has(x.ean) && (rcAcomp(x) || !rcCache.tratados.has(rcChave(x))));
   if(!base.length){
     view.innerHTML = `<div class="card center"><div style="font-size:38px;">⏳</div>
       <h2>Nenhum lote com risco projetado</h2>
@@ -1018,7 +1039,7 @@ async function acompanharRisco(idx){
     await sb.from("risco_feedback").insert(f);
     (rcCache.feedback = rcCache.feedback||[]).push(f);
   }catch(e){ console.warn("feedback", e); }
-  if(qtd===0){ desenharRisco(); return alert("Registrado: a loja não encontrou este lote. Conta como alerta falso na taxa de acerto."); }
+  if(qtd===0){ rcCache.tratados.add(rcChave(x)); desenharRisco(); return alert("Registrado: a loja não encontrou este lote. Saiu da lista do Risco e conta como alerta falso na taxa de acerto."); }
   loading(true);
   try{
     const {data:ex} = await sb.from("lotes").select("id").eq("ean",x.ean).eq("loja",x.loja)
@@ -1885,6 +1906,7 @@ async function montarRadar(mes, porLoja, ress, descPorLote, balInf){
   let abertos = [];
   try{ abertos = await sbTodos(()=>sb.from("lotes").select("ean,loja,validade").eq("resolvido",false)); }catch(e){ abertos = []; }
   const temLote = new Set(abertos.map(l=>l.ean+"|"+l.loja+"|"+l.validade));
+  (await rcTratados(null)).forEach(k=>temLote.add(k));
   const riscoLoja = {}, usoRisco = {};
   risco.filter(x=>x.urgente && !x.sem_venda && !x.conferir_validade && !x.estoque_suspeito).forEach(x=>{
     const u = usoRisco[x.loja] || (usoRisco[x.loja] = {acomp:0, tot:0});
@@ -1892,7 +1914,7 @@ async function montarRadar(mes, porLoja, ress, descPorLote, balInf){
     if(temLote.has(x.ean+"|"+x.loja+"|"+x.validade)) u.acomp++;
     else riscoLoja[x.loja] = (riscoLoja[x.loja]||0) + (Number(x.valor_risco)||0);
   });
-  // antecedência do cadastro: lotes criados no mês PELA LOJA (operador), sem as recolhas retroativas
+  // antecedência do cadastro: lotes criados no mês PELA LOJA (tudo menos Prevenção), sem as recolhas retroativas
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
   let lotesMes = [], papelDe = {};
   try{
@@ -1903,7 +1925,7 @@ async function montarRadar(mes, porLoja, ress, descPorLote, balInf){
   const antecLoja = {};
   lotesMes.forEach(l=>{
     const papel = papelDe[l.criado_por];
-    if(papel && papel!=="operador") return;               // só o que a loja cadastrou
+    if(papel==="prevencao" || papel==="fornecedor") return; // só o que a loja cadastrou (operador ou gerente/gestor da loja)
     const dCad = String(l.criado_em).slice(0,10);
     const dias = Math.round((new Date(l.validade+"T12:00") - new Date(dCad+"T12:00"))/86400000);
     if(dias < 0) return;                                  // recolha de item já vencido não conta aqui
