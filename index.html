@@ -208,74 +208,16 @@ function precoNormal(lote){
   const pl = ploja(lote.ean, lote.loja);
   return pl && pl.preco_venda ? Number(pl.preco_venda) : Number(lote.preco_atual)||0;
 }
-/* ---------- preço no VR com um clique (22/10/2026) ----------
-   O Data Crítica é https e o servidor do VR é http: o navegador não deixa um chamar o
-   outro direto. Então o clique abre uma janelinha do próprio servidor do VR
-   (precos_enviar.html), que pede a senha de preços se a liberação de 15 min venceu,
-   envia pela fila do precos_vr.php (log com responsável) e fecha sozinha.
+/* ---------- preço no VR no mesmo clique (22/10/2026) ----------
+   O Data Crítica é https e o servidor do VR é http: o navegador não deixa um chamar
+   o outro direto, e pop-up teria de ser liberado aparelho por aparelho. Então, depois
+   de gravar aqui, a própria tela vai até a página do VR (precos_enviar.html), que pede
+   a senha de preços se a liberação de 15 min venceu, envia pela fila do precos_vr.php
+   (log com responsável) e VOLTA sozinha para cá, para o mesmo item, com o resultado.
    Rebaixa = oferta no VR de hoje até o vencimento; voltar ao normal = oferta ao
    preço cheio só até hoje (amanhã o VR já está no normal). */
-const VR_ORIG = "http://rendemaisdns.zapto.org:8086";
-const VR_URL  = VR_ORIG + "/teste/precos_enviar.html";
-const vrPend = { win:null, pronto:false, msg:null };
-function vrAbrir(){
-  if(!sess || sess.papel === "fornecedor") return false;
-  try{ vrPend.win = window.open(VR_URL, "precosVR", "width=480,height=600"); }catch(e){ vrPend.win = null; }
-  vrPend.pronto = false; vrPend.msg = null; vrPend.versao = 0; vrPend.aoFicarPronto = null;
-  if(vrPend.win){
-    const w = vrPend.win;
-    clearTimeout(vrPend.t);
-    vrPend.t = setTimeout(()=>{   // a janela não respondeu: servidor do VR fora do ar ou sem a página
-      if(vrPend.win === w && !vrPend.pronto){
-        try{ w.close(); }catch(e){}
-        vrPend.win = null;
-        const aviso = "⚠ Não consegui falar com o servidor do VR. Se continuar, o preço muda só no Data Crítica — no VR fica o anterior.";
-        if(vrResposta) vrResposta(confirm(aviso + "\n\n" + (vrPend.texto || "Continuar?")));
-        else alert(aviso);
-      }
-    }, 15000);
-  }
-  if(!vrPend.win) alert("O navegador bloqueou a janela do VR. Libere os pop-ups deste site (ícone na barra de endereço) para o preço mudar no VR.");
-  return !!vrPend.win;
-}
-function vrTentar(){
-  if(!vrPend.win || !vrPend.pronto || !vrPend.msg) return;
-  try{ vrPend.win.postMessage(Object.assign({precosVR:true}, vrPend.msg), VR_ORIG); }catch(e){}
-  vrPend.msg = null;
-}
-function vrMandar(itens){ itens = (itens||[]).filter(Boolean); if(!vrPend.win) return; vrPend.msg = itens.length ? {itens} : {cancelar:true}; try{ vrPend.win.focus(); }catch(e){} vrTentar(); }
-function vrCancelar(){ try{ if(vrPend.win) vrPend.win.close(); }catch(e){} vrPend.win = null; }
-/* Confirmação feita DENTRO da janelinha do VR, que fica na frente. Sem janelinha (pop-up
-   bloqueado ou nada para o VR), cai no confirm normal do Data Crítica. */
-let vrResposta = null;
-function vrPerguntar(itens, texto){
-  itens = (itens||[]).filter(Boolean);
-  if(!vrPend.win || !itens.length){ vrCancelar(); return Promise.resolve(confirm(texto)); }
-  vrPend.texto = texto;
-  return new Promise(res=>{
-    const w = vrPend.win;
-    vrResposta = v=>{ vrResposta = null; clearInterval(t); res(v); };
-    const t = setInterval(()=>{ if(w.closed && vrResposta && vrPend.win === w) vrResposta(false); }, 500);
-    const perguntar = ()=>{
-      if(vrPend.versao >= 2){ vrPend.msg = { perguntar: { itens, texto } }; vrTentar(); }
-      else { window.focus(); if(vrResposta) vrResposta(confirm(texto)); }   // janela antiga do servidor: pergunta aqui mesmo
-    };
-    if(vrPend.pronto) perguntar(); else vrPend.aoFicarPronto = perguntar;
-  });
-}
-window.addEventListener("message", ev=>{
-  if(ev.origin !== VR_ORIG || !ev.data || !ev.data.precosVR) return;
-  if(ev.data.pronto){ vrPend.pronto = true; vrPend.versao = ev.data.v || 1;
-    if(vrPend.aoFicarPronto){ const f = vrPend.aoFicarPronto; vrPend.aoFicarPronto = null; f(); }
-    vrTentar(); return; }
-  if("resposta" in ev.data){ if(vrResposta) vrResposta(!!ev.data.resposta); return; }
-  if(ev.data.ok === false && !ev.data.cancelado)
-    alert("⚠ O preço foi gravado no Data Crítica, mas NÃO mudou no VR:\n\n" + (ev.data.erro || ev.data.resumo || ""));
-  if(ev.data.cancelado)
-    alert("Envio ao VR cancelado: o preço mudou só no Data Crítica. No VR continua o anterior.");
-});
+const VR_URL = "http://rendemaisdns.zapto.org:8086/teste/precos_enviar.html";
 const hojeISO = ()=>{ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
-/* item da fila do VR para um lote; pl = produtos_loja (quando a tela já tem) */
 function vrItem(l, preco, pl){
   if(!l) return null;
   pl = pl || ploja(l.ean, l.loja) || {};
@@ -289,6 +231,27 @@ function vrItem(l, preco, pl){
     preco: rebaixa ? preco : cheio, preconormal: cheio > 0 ? cheio : undefined,
     datainicio: hoje, datatermino: rebaixa ? String(l.validade).slice(0,10) : hoje,
     descricao: (l.produtos && l.produtos.descricao) || l.ean, ref: "dc:" + l.id + ":" + preco };
+}
+/* devolve true se saiu da página rumo ao VR */
+function vrIr(itens){
+  itens = (itens||[]).filter(Boolean);
+  if(!sess || sess.papel === "fornecedor" || !itens.length) return false;
+  try{ localStorage.setItem("dc_vr_volta", JSON.stringify({page:route.page, param:route.param, em:Date.now()})); }catch(e){}
+  const volta = location.origin + location.pathname;
+  location.href = VR_URL + "#" + encodeURIComponent(JSON.stringify({ itens, volta }));
+  return true;
+}
+/* na volta do VR: reabre a mesma tela e mostra o resultado */
+function vrDaVolta(){
+  if(!location.hash.startsWith("#vr=")) return;
+  let r = {}; try{ r = JSON.parse(decodeURIComponent(location.hash.slice(4))); }catch(e){}
+  history.replaceState(null, "", location.pathname);
+  let v = null; try{ v = JSON.parse(localStorage.getItem("dc_vr_volta")||"null"); localStorage.removeItem("dc_vr_volta"); }catch(e){}
+  if(sess && v && v.page && Date.now() - (v.em||0) < 30*60*1000) route = {page:v.page, param:v.param, prev:[{page:home(), param:null}]};
+  const msg = r.ok ? "✔ Preço alterado no Data Crítica e no VR" + (r.responsavel ? " (liberado por " + r.responsavel + ")." : ".")
+    : r.cancelado ? "Envio ao VR cancelado: o preço mudou só no Data Crítica. No VR continua o anterior."
+    : "⚠ O preço foi gravado no Data Crítica, mas NÃO mudou no VR:\n\n" + (r.erro || r.resumo || "");
+  setTimeout(()=>alert(msg), 600);
 }
 
 function sugestaoPreco(lote){
@@ -1701,10 +1664,7 @@ async function aceitarSelecionadas(){
   const abaixo = sel.filter(s=>{ const x = sugCache.find(y=>y.s.id===s.id); return x && x.abaixoCusto; });
   let aviso = `Aplicar ${sel.length} preço(s) sugerido(s) e marcar como aceitos?`;
   if(abaixo.length) aviso += `\n\nATENÇÃO: ${abaixo.length} está(ão) abaixo do último custo.`;
-  vrAbrir();
-  const itensPre = sel.map(s=>{ const x = sugCache.find(y=>y.s.id===s.id); return x ? vrItem(x.l, s.preco, x.pl) : null; });
-  if(!(await vrPerguntar(itensPre, aviso))){ vrCancelar(); return; }
-  const vr = !!vrPend.win;
+  if(!confirm(aviso)) return;
   loading(true);
   let ok=0, falhas=[]; const itensVR=[];
   for(const s of sel){
@@ -1721,7 +1681,8 @@ async function aceitarSelecionadas(){
       if(x) itensVR.push(vrItem(x.l, s.preco, x.pl));
     }catch(e){ falhas.push(s.id); }
   }
-  if(vr) vrMandar(itensVR);
+  if(falhas.length) alert(`${falhas.length} sugestão(ões) falhou(ram) — tente de novo.`);
+  if(vrIr(itensVR)) return;
   loading(false);
   alert(`${ok} sugestão(ões) aceita(s) e preço aplicado.`
         + (falhas.length? `\n${falhas.length} falhou(ram) — tente de novo.` : ""));
@@ -1751,21 +1712,17 @@ async function aceitarSugestao(sugId, loteId, preco){
   // a aba de sugestões não carrega cache.lotes; usa o contexto que ela já buscou
   const daAba = (typeof sugCache!=="undefined" && sugCache.find(x=>x.s.id===sugId)) || null;
   const custo = l ? (ploja(l.ean,l.loja)||{}).ultimo_custo : (daAba ? daAba.custo : 0);
-  vrAbrir();
-  const itemVR = vrItem(l || (daAba && daAba.l), preco, daAba ? daAba.pl : null);
-  const txt = (custo && preco<Number(custo) ? "⚠ Preço sugerido está ABAIXO DO CUSTO ("+brl(custo)+").\n\n" : "") +
-              `Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`;
-  if(!(await vrPerguntar([itemVR], txt))){ vrCancelar(); return; }
-  const vr = !!vrPend.win;
+  if(custo && preco<Number(custo) && !confirm("Preço sugerido está abaixo do custo ("+brl(custo)+"). Aceitar mesmo assim?")) return;
+  if(!confirm(`Aplicar ${brl(preco)} neste lote e marcar a sugestão como aceita?`)) return;
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:preco, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",loteId);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:loteId, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (sug. fornecedor)"});
     await sb.from("sugestoes_fornecedor").update({status:"aceita", respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id",sugId);
-    if(vr) vrMandar([itemVR]);
-    if(!vr) alert("Sugestão aceita — preço aplicado no Data Crítica e item no relatório da equipe de apoio.");
-  }catch(e){ vrCancelar(); erroDB(e); }
+    if(vrIr([vrItem(l || (daAba && daAba.l), preco, daAba ? daAba.pl : null)])) return;
+    alert("Sugestão aceita — preço aplicado e item no relatório da equipe de apoio.");
+  }catch(e){ erroDB(e); }
   loading(false); render();
 }
 async function recusarSugestao(sugId){
@@ -1848,37 +1805,26 @@ async function aplicarPreco(id){
   const np=parseFloat(document.getElementById("novoPreco").value);
   if(!(np>0)) return alert("Preço inválido.");
   const custo = (ploja(l.ean,l.loja)||{}).ultimo_custo;
-  vrAbrir();   // abre já no clique, senão o navegador bloqueia
-  const itemVR = vrItem(l, np);
-  const abaixo = custo && np<Number(custo);
-  const txt = (abaixo ? "⚠ Preço ABAIXO DO CUSTO ("+brl(custo)+").\n\n" : "") + "Aplicar "+brl(np)+" neste lote?";
-  if(vrPend.win && itemVR){ if(!(await vrPerguntar([itemVR], txt))){ vrCancelar(); return; } }
-  else { vrCancelar(); if(abaixo && !confirm(txt)) return; }
-  const vr = !!vrPend.win;
+  if(custo && np<Number(custo) && !confirm("Preço abaixo do custo ("+brl(custo)+"). Confirmar mesmo assim?")) return;
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:np, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:np, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
-    if(vr) vrMandar([itemVR]);
-    if(!vr) alert("Preço aplicado no Data Crítica. Item adicionado ao relatório da equipe de apoio.");
-  }catch(e){ vrCancelar(); erroDB(e); }
+    if(vrIr([vrItem(l, np)])) return;
+    alert("Preço aplicado. Item adicionado ao relatório da equipe de apoio.");
+  }catch(e){ erroDB(e); }
   loading(false); render();
 }
 async function voltarNormal(id){
   const l=cache.lotes.find(x=>x.id===id), pn=precoNormal(l);
-  vrAbrir();
-  const itemVR = vrItem(l, pn);
-  if(vrPend.win && itemVR){ if(!(await vrPerguntar([itemVR], "Voltar ao preço normal de "+brl(pn)+"?"))){ vrCancelar(); return; } }
-  else { vrCancelar(); }
-  const vr = !!vrPend.win;
   loading(true);
   try{
     const {error} = await sb.from("lotes").update({preco_atual:pn, pend_apoio:true, analisado_em:new Date().toISOString()}).eq("id",id);
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
-    if(vr) vrMandar([itemVR]);
-  }catch(e){ vrCancelar(); erroDB(e); }
+    if(vrIr([vrItem(l, pn)])) return;
+  }catch(e){ erroDB(e); }
   loading(false); render();
 }
 async function registrarVenda(id){
@@ -3245,6 +3191,7 @@ window.onerror = function(msg,src,line){
       if(data){ sess=data; route={page:home(),param:null,prev:[]}; }
     }
   }catch(e){}
+  try{ vrDaVolta(); }catch(e){}
   render();
   if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();
