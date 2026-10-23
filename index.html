@@ -1449,7 +1449,8 @@ function vItem(id){
       <summary style="cursor:pointer; font-weight:700; color:var(--navy);">✏️ Corrigir contagem (quantidade / validade)</summary>
       <p class="muted" style="margin-top:8px;">Use quando a contagem foi registrada errada. A correção fica registrada (quem, quando e os valores antigos).</p>
       <label>Quantidade inicial correta</label>
-      <input id="corrQtd" type="number" inputmode="decimal" step="1" min="0" value="${Number(l.qtd_inicial)}">
+      <input id="corrQtd" type="number" inputmode="decimal" step="any" min="0" value="${Number(l.qtd_inicial)}">
+      <p class="muted" style="margin:-4px 0 8px; font-size:12px;">Digite <b>0</b> se o produto não estava na loja ou foi lançado por engano: o lote é encerrado sem gerar perda.</p>
       <label>Validade correta</label>
       <input id="corrVal" type="date" value="${String(l.validade).slice(0,10)}">
       <label>Motivo da correção (opcional)</label>
@@ -1781,8 +1782,14 @@ async function corrigirLote(id){
   const jaVendido = qtdAntiga - Number(l.qtd_restante);
   const novoRest = Math.max(0, novaQtd - jaVendido);
   if(qtdAntiga===novaQtd && valAntiga===novaVal) return alert("Nada mudou.");
-  if(novaQtd < jaVendido && !confirm(`Atenção: já foram vendidas ${jaVendido} un desde a contagem, mas você informou quantidade inicial de ${novaQtd}. Isso deixará o restante em 0. Confirmar mesmo assim?`)) return;
-  if(!confirm(`Confirmar correção?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nQuantidade inicial: ${qtdAntiga} → ${novaQtd}\nValidade: ${fmtData(valAntiga)} → ${fmtData(novaVal)}`)) return;
+  // quantidade 0 = a contagem não existia (produto não estava na loja ou foi lançado errado):
+  // o banco não aceita lote com quantidade inicial 0, então o lote é ENCERRADO, sem gerar perda nem cobrança.
+  const encerrar = novaQtd === 0;
+  if(encerrar){
+    if(!confirm(`Quantidade 0 = este lote não existia (contagem errada).\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\n\nO lote será ENCERRADO: sai do Calendário e da Gestão, sem gerar perda nem cobrança ao fornecedor. A correção fica registrada para auditoria.\n\nConfirmar?`)) return;
+  }
+  else if(novaQtd < jaVendido && !confirm(`Atenção: já foram vendidas ${jaVendido} un desde a contagem, mas você informou quantidade inicial de ${novaQtd}. Isso deixará o restante em 0. Confirmar mesmo assim?`)) return;
+  if(!encerrar && !confirm(`Confirmar correção?\n\n${(l.produtos&&l.produtos.descricao)||l.ean}\nQuantidade inicial: ${qtdAntiga} → ${novaQtd}\nValidade: ${fmtData(valAntiga)} → ${fmtData(novaVal)}`)) return;
   loading(true);
   try{
     await sb.from("correcoes_lote").insert({
@@ -1791,9 +1798,10 @@ async function corrigirLote(id){
       validade_antiga: valAntiga, validade_nova: novaVal,
       motivo: motivo || null, corrigido_por: sess.nome
     });
-    const {error} = await sb.from("lotes").update({
-      qtd_inicial: novaQtd, qtd_restante: novoRest, validade: novaVal
-    }).eq("id", id);
+    const {error} = await sb.from("lotes").update(encerrar
+      ? { qtd_restante: 0, zerado: true, resolvido: true, validade: novaVal }
+      : { qtd_inicial: novaQtd, qtd_restante: novoRest, validade: novaVal }
+    ).eq("id", id);
     if(error) throw error;
     const {data:ress} = await sb.from("ressarcimento_diario").select("*").eq("lote_id", id).eq("preco_vigente", 0);
     if(ress && ress.length){
@@ -1805,7 +1813,7 @@ async function corrigirLote(id){
       }
     }
     await sb.from("descartes").update({qtd_validada: novaQtd}).eq("lote_id", id);
-    alert("Correção salva e registrada para auditoria.");
+    alert(encerrar ? "Lote encerrado como contagem errada. Registrado para auditoria." : "Correção salva e registrada para auditoria.");
   }catch(e){
     if(String(e.message||"").includes("correcoes_lote")) alert("O registro de correções ainda não foi ativado no banco. Rode o SQL de setup.");
     else erroDB(e);
