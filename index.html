@@ -216,6 +216,13 @@ function precoNormal(lote){
    (log com responsável) e VOLTA sozinha para cá, para o mesmo item, com o resultado.
    Rebaixa = oferta no VR de hoje até o vencimento; voltar ao normal = oferta ao
    preço cheio só até hoje (amanhã o VR já está no normal). */
+let vrMotivo = "";   // por que um item não foi ao VR (mostrado no aviso)
+function vrNota(){
+  const m = vrMotivo; vrMotivo = "";
+  if(!sess || sess.papel === "fornecedor") return "";
+  if(!vrAuto()) return "\n\nNão foi ao VR: a chave \"Mudar também no VR\" está desmarcada — digite no VR à mão.";
+  return m ? "\n\n⚠ NÃO foi ao VR: " + m : "";
+}
 const VR_URL = "http://rendemaisdns.zapto.org:8086/teste/precos_enviar.html";
 const hojeISO = ()=>{ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 function vrItem(l, preco, pl){
@@ -225,7 +232,10 @@ function vrItem(l, preco, pl){
   const hoje = hojeISO(), lj = Number(String(l.loja||"").replace(/\D/g,""));
   if(!lj || !(preco > 0)) return null;
   const rebaixa = cheio > 0 && preco < cheio - 0.004;
-  if(rebaixa && String(l.validade) < hoje) return null;     // já venceu: não há o que ofertar
+  if(rebaixa && String(l.validade) < hoje){                 // já venceu: não há o que ofertar no VR
+    vrMotivo = "o lote está VENCIDO desde " + String(l.validade).slice(0,10).split("-").reverse().join("/") +
+      " — produto vencido não pode ser vendido. Confira a validade (se estiver errada, corrija em \"Corrigir contagem\") ou faça o descarte.";
+    return null; }
   if(!rebaixa && !(cheio > 0)) return null;
   return { tipo:"oferta", ean:String(l.ean), id_loja:lj,
     preco: rebaixa ? preco : cheio, preconormal: cheio > 0 ? cheio : undefined,
@@ -1707,6 +1717,7 @@ async function aceitarSelecionadas(){
   }
   if(falhas.length) alert(`${falhas.length} sugestão(ões) falhou(ram) — tente de novo.`);
   if(vrIr(itensVR)) return;
+  { const nota = vrNota(); if(nota) alert("Preços aplicados no Data Crítica." + nota); }
   loading(false);
   alert(`${ok} sugestão(ões) aceita(s) e preço aplicado.`
         + (falhas.length? `\n${falhas.length} falhou(ram) — tente de novo.` : ""));
@@ -1745,7 +1756,7 @@ async function aceitarSugestao(sugId, loteId, preco){
     await sb.from("precos_hist").insert({lote_id:loteId, preco, aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (sug. fornecedor)"});
     await sb.from("sugestoes_fornecedor").update({status:"aceita", respondido_por_nome:sess.nome, respondido_em:new Date().toISOString()}).eq("id",sugId);
     if(vrIr([vrItem(l || (daAba && daAba.l), preco, daAba ? daAba.pl : null)])) return;
-    alert("Sugestão aceita — preço aplicado e item no relatório da equipe de apoio.");
+    alert("Sugestão aceita — preço aplicado no Data Crítica e item no relatório da equipe de apoio." + vrNota());
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
@@ -1843,7 +1854,7 @@ async function aplicarPreco(id){
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:np, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
     if(vrIr([vrItem(l, np)])) return;
-    alert("Preço aplicado. Item adicionado ao relatório da equipe de apoio.");
+    alert("Preço aplicado no Data Crítica. Item adicionado ao relatório da equipe de apoio." + vrNota());
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
@@ -1855,6 +1866,7 @@ async function voltarNormal(id){
     if(error) throw error;
     await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome});
     if(vrIr([vrItem(l, pn)])) return;
+    const nota = vrNota(); if(nota) alert("Voltou ao preço normal no Data Crítica." + nota);
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
