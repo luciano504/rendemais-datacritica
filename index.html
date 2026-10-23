@@ -168,22 +168,32 @@ async function carregarSugestoes(){
     cache.sugestoes = data||[];
   }catch(e){ cache.sugestoes = []; }
 }
+/* Lista grande de códigos num .in() estoura o tamanho do endereço (Bad Request) e o
+   Supabase devolve no máximo 1000 linhas: quebra a lista em blocos e pagina cada bloco. */
+async function sbIn(montar, col, vals, tam=80){
+  const lista = [...new Set(vals)], blocos = [];
+  for(let i=0;i<lista.length;i+=tam) blocos.push(lista.slice(i,i+tam));
+  const res = new Array(blocos.length);
+  let prox = 0;
+  const trabalhador = async ()=>{ while(prox < blocos.length){ const k = prox++; res[k] = await sbTodos(()=>montar().in(col, blocos[k])); } };
+  await Promise.all([trabalhador(), trabalhador(), trabalhador(), trabalhador()]);   // 4 consultas por vez
+  return res.flat();
+}
 async function carregarLotes(){
-  let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade");
-  if(nivel(sess.papel)<3 && sess.papel!=="fornecedor") q = q.eq("loja", sess.loja);
-  const {data,error} = await q;
-  if(error) throw error;
+  const data = await sbTodos(()=>{
+    let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade").order("id");
+    if(nivel(sess.papel)<3 && sess.papel!=="fornecedor") q = q.eq("loja", sess.loja);
+    return q;
+  });
   cache.lotes = data;
   // dados por loja dos produtos envolvidos
   const eans = [...new Set(data.map(l=>l.ean))];
   cache.plojas = {};
   if(eans.length){
-    const {data:pl,error:e2} = await sb.from("produtos_loja").select("*").in("ean",eans);
-    if(e2) throw e2;
+    const pl = await sbIn(()=>sb.from("produtos_loja").select("*").order("ean").order("loja"), "ean", eans);
     pl.forEach(p=>{ cache.plojas[p.ean+"|"+p.loja]=p; });
     const corte = new Date(Date.now()-DIAS_VMD*86400000).toISOString().slice(0,10);
-    const {data:vd,error:e3} = await sb.from("vendas_dia").select("ean,loja,qtd").in("ean",eans).gte("data",corte);
-    if(e3) throw e3;
+    const vd = await sbIn(()=>sb.from("vendas_dia").select("ean,loja,qtd,data").gte("data",corte).order("ean").order("loja").order("data"), "ean", eans);
     cache.vendas = {};
     vd.forEach(v=>{ const k=v.ean+"|"+v.loja; cache.vendas[k]=(cache.vendas[k]||0)+Number(v.qtd); });
   }
@@ -390,8 +400,8 @@ async function histTodos(){
   const ids = cache.lotes.map(l=>l.id);
   cache.hist = {};
   if(!ids.length) return;
-  const {data,error} = await sb.from("precos_hist").select("*").in("lote_id",ids).order("criado_em");
-  if(error) throw error;
+  const data = await sbIn(()=>sb.from("precos_hist").select("*").order("criado_em").order("id"), "lote_id", ids, 60);
+  data.sort((a,b)=>String(a.criado_em).localeCompare(String(b.criado_em)));
   data.forEach(h=>{ (cache.hist[h.lote_id]=cache.hist[h.lote_id]||[]).push(h); });
 }
 
@@ -2379,7 +2389,7 @@ async function vFornHome(){
   const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
   let descartesV = [];
   if(lotesVencIds.length){
-    try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+    try{ descartesV = await sbIn(()=>sb.from("descartes").select("*").eq("status","validado").order("lote_id"), "lote_id", lotesVencIds, 60); }catch(e){}
   }
   const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
   const ger = (ress||[]).reduce((a,x)=>a+Number(x.valor||0),0);
@@ -2761,7 +2771,7 @@ async function vFornecDet(param){
   const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
   let descartesV = [];
   if(lotesVencIds.length){
-    try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+    try{ descartesV = await sbIn(()=>sb.from("descartes").select("*").eq("status","validado").order("lote_id"), "lote_id", lotesVencIds, 60); }catch(e){}
   }
   const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
   // buscar descrições dos produtos separadamente (sem depender de FK no embed)
@@ -2864,7 +2874,7 @@ async function baixarFornecPdf(idsStr, mes){
     const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
     let descartesV = [];
     if(lotesVencIds.length){
-      try{ const {data:dsc} = await sb.from("descartes").select("*").in("lote_id",lotesVencIds).eq("status","validado"); descartesV = dsc||[]; }catch(e){}
+      try{ descartesV = await sbIn(()=>sb.from("descartes").select("*").eq("status","validado").order("lote_id"), "lote_id", lotesVencIds, 60); }catch(e){}
     }
     const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
     const eans = [...new Set((ress||[]).map(r=>r.ean))];
@@ -3041,7 +3051,8 @@ async function marcarEnviado(){
   loading(true);
   try{
     const ids = cache.lotes.filter(l=>l.pend_apoio).map(l=>l.id);
-    const {error} = await sb.from("lotes").update({pend_apoio:false}).in("id",ids);
+    let error = null;
+    for(let i=0;i<ids.length && !error;i+=60){ ({error} = await sb.from("lotes").update({pend_apoio:false}).in("id",ids.slice(i,i+60))); }
     if(error) throw error;
     alert("Relatório marcado como enviado.");
   }catch(e){ erroDB(e); }
