@@ -276,7 +276,7 @@ function vrIr(itens){
     if(x.datatermino > a.datatermino) a.datatermino = x.datatermino;
     a.qtd_limite = (a.qtd_limite && x.qtd_limite) ? a.qtd_limite + x.qtd_limite : undefined; });
   itens = Object.values(g);
-  try{ localStorage.setItem("dc_vr_volta", JSON.stringify({page:route.page, param:route.param, em:Date.now()})); }catch(e){}
+  try{ salvarEstadoTela(); localStorage.setItem("dc_vr_volta", JSON.stringify({page:route.page, param:route.param, prev:route.prev.slice(-10), em:Date.now()})); }catch(e){}
   const volta = location.origin + location.pathname;
   location.href = VR_URL + "#" + encodeURIComponent(JSON.stringify({ itens, volta }));
   return true;
@@ -287,7 +287,7 @@ function vrDaVolta(){
   let r = {}; try{ r = JSON.parse(decodeURIComponent(location.hash.slice(4))); }catch(e){}
   history.replaceState(null, "", location.pathname);
   let v = null; try{ v = JSON.parse(localStorage.getItem("dc_vr_volta")||"null"); localStorage.removeItem("dc_vr_volta"); }catch(e){}
-  if(sess && v && v.page && Date.now() - (v.em||0) < 30*60*1000) route = {page:v.page, param:v.param, prev:[{page:home(), param:null}]};
+  if(sess && v && v.page && Date.now() - (v.em||0) < 30*60*1000) route = {page:v.page, param:v.param, prev:(v.prev && v.prev.length) ? v.prev : [{page:home(), param:null}]};
   const msg = r.ok ? "✔ Preço alterado no Data Crítica e no VR" + (r.responsavel ? " (liberado por " + r.responsavel + ")." : ".")
     : r.cancelado ? "Envio ao VR cancelado: o preço mudou só no Data Crítica. No VR continua o anterior."
     : "⚠ O preço foi gravado no Data Crítica, mas NÃO mudou no VR:\n\n" + (r.erro || r.resumo || "");
@@ -329,8 +329,41 @@ function sugestaoTransf(lote){
 /* ================= NAVEGAÇÃO ================= */
 function nivel(p){ return {operador:1,prevencao:2,gestor:3,fornecedor:0}[p] ?? 0; }
 function home(){ return sess.papel==="fornecedor"?"fornhome":(sess.papel==="gestor"?"gestor":(sess.papel==="prevencao"?"calendario":"contagem")); }
-function go(page,param){ route.prev.push({page:route.page,param:route.param}); route.page=page; route.param=param; render(); }
-function goBack(){ const p=route.prev.pop()||{page:home(),param:null}; route.page=p.page; route.param=p.param; render(); }
+function go(page,param){ rolagem[route.page] = window.scrollY; salvarEstadoTela(); route.prev.push({page:route.page,param:route.param}); route.page=page; route.param=param; voltarRolagem=false; render(); }
+function goBack(){ const p=route.prev.pop()||{page:home(),param:null}; route.page=p.page; route.param=p.param; voltarRolagem=true; render(); }
+
+/* Filtros e posição da lista sobrevivem à ida e volta do VR (que recarrega a página):
+   ficam no sessionStorage da aba, e "voltar" devolve a lista no mesmo ponto. */
+let rolagem = {}, voltarRolagem = false;
+function salvarEstadoTela(){
+  try{
+    sessionStorage.setItem("dc_estado_tela", JSON.stringify({
+      secaoFiltro, ordenar, lojaFiltro, apenasAnalisar,
+      rcLoja, rcFiltro, rcSecao, rcBusca,
+      sugFiltroLoja, sugFiltroSecao, placaFiltro, rolagem
+    }));
+  }catch(e){}
+}
+function restaurarEstadoTela(){
+  try{
+    const e = JSON.parse(sessionStorage.getItem("dc_estado_tela")||"null"); if(!e) return;
+    if("secaoFiltro" in e) secaoFiltro = e.secaoFiltro;
+    if(e.ordenar) ordenar = e.ordenar;
+    if("lojaFiltro" in e) lojaFiltro = e.lojaFiltro;
+    if("apenasAnalisar" in e) apenasAnalisar = !!e.apenasAnalisar;
+    if("rcLoja" in e) rcLoja = e.rcLoja; if(e.rcFiltro) rcFiltro = e.rcFiltro;
+    if("rcSecao" in e) rcSecao = e.rcSecao; if("rcBusca" in e) rcBusca = e.rcBusca||"";
+    if("sugFiltroLoja" in e) sugFiltroLoja = e.sugFiltroLoja; if("sugFiltroSecao" in e) sugFiltroSecao = e.sugFiltroSecao;
+    if(e.placaFiltro) placaFiltro = e.placaFiltro;
+    if(e.rolagem) rolagem = e.rolagem;
+  }catch(err){}
+}
+function aplicarRolagem(){
+  if(!voltarRolagem) return;
+  voltarRolagem = false;
+  const y = rolagem[route.page];
+  if(y) requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0, y)));
+}
 function logout(){ sess=null; stopScan(); localStorage.removeItem("dc_sess"); route={page:"login",param:null,prev:[]}; render(); }
 
 function renderNav(){
@@ -395,6 +428,7 @@ async function render(){
     else if(route.page==="fornec"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = '<div class="card center muted">Calculando…</div>'; await vFornec(); }
     else if(route.page==="fornecdet"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = '<div class="card center muted">Carregando…</div>'; await vFornecDet(route.param); }
   }catch(e){ v.innerHTML = `<div class="alertbox a-red">⚠️ ${e.message||e}<br><button class="btn-s btn-sm" onclick="render()">Tentar de novo</button></div>`; }
+  salvarEstadoTela(); aplicarRolagem();
 }
 async function histTodos(){
   const ids = cache.lotes.map(l=>l.id);
@@ -3245,6 +3279,7 @@ window.onerror = function(msg,src,line){
       if(data){ sess=data; route={page:home(),param:null,prev:[]}; }
     }
   }catch(e){}
+  restaurarEstadoTela();
   try{ vrDaVolta(); }catch(e){}
   render();
   if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
