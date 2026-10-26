@@ -2561,8 +2561,8 @@ function lotesPlacas(){
   if(placaFiltro.secao) ls = ls.filter(l=>(secaoDo(l)||"(sem seção)")===placaFiltro.secao);
   if(placaFiltro.estado==="vigente"){
     ls = ls.filter(l=>{ const pn=precoNormal(l); return l.preco_atual && pn && Number(l.preco_atual)<pn; });
-  } else if(placaFiltro.estado==="alterados"){
-    const corte = Date.now() - 48*3600*1000;
+  } else if(placaFiltro.estado==="alterados" || placaFiltro.estado==="alterados24"){
+    const corte = Date.now() - (placaFiltro.estado==="alterados24" ? 24 : 48)*3600*1000;
     ls = ls.filter(l=>{ const h=cache.hist[l.id]||[]; if(!h.length) return false;
       return new Date(h[h.length-1].criado_em).getTime() >= corte; });
   } else if(placaFiltro.estado==="sugeridos"){
@@ -2601,6 +2601,7 @@ function vPlacas(){
     <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">
       <button class="chip ${placaFiltro.estado==='todos'?'chip-on':''}" onclick="setPlacaFiltro('estado','todos')">Todos</button>
       <button class="chip ${placaFiltro.estado==='vigente'?'chip-on':''}" onclick="setPlacaFiltro('estado','vigente')">Rebaixa vigente</button>
+      <button class="chip ${placaFiltro.estado==='alterados24'?'chip-on':''}" onclick="setPlacaFiltro('estado','alterados24')">Alterados (24h)</button>
       <button class="chip ${placaFiltro.estado==='alterados'?'chip-on':''}" onclick="setPlacaFiltro('estado','alterados')">Alterados (48h)</button>
       <button class="chip ${placaFiltro.estado==='sugeridos'?'chip-on':''}" onclick="setPlacaFiltro('estado','sugeridos')">💡 Sugeridos por fornecedor</button>
     </div>
