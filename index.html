@@ -119,6 +119,19 @@ const SUPABASE_URL = "https://estciwkeihmokvlnvaum.supabase.co";
 const SUPABASE_KEY = "sb_publishable_l14fjxQmWUeu5OXlZJ35GA_-X3ESkgZ";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+/* Horizonte de trabalho: só entra na análise o que vence em até HORIZONTE_DIAS (e os vencidos).
+   Começou em 30 dias (28/10/2026) para o app ficar leve; para ampliar, troque só este número. */
+const HORIZONTE_DIAS = 30;
+const limiteISO = () => new Date(Date.now() + HORIZONTE_DIAS*86400000).toISOString().slice(0,10);
+
+/* Os dados dos lotes ficam guardados por 2 minutos entre uma tela e outra; qualquer gravação
+   no banco (preço, contagem, descarte...) marca como "sujo" e força recarregar na próxima tela. */
+let dadosSujos = true;
+{ const _from = sb.from.bind(sb);
+  sb.from = (t) => { const q = _from(t);
+    ["insert","update","upsert","delete"].forEach(m=>{ if(typeof q[m]==="function"){ const o=q[m].bind(q); q[m]=(...a)=>{ dadosSujos=true; return o(...a); }; } });
+    return q; }; }
+
 const LOJAS = {L01:"L01 Veneza",L02:"L02 Máximo",L03:"L03 Royal",L04:"L04 Lojão",L05:"L05 Alvorada",L08:"L08 Tradição",L09:"L09 Massangana"};
 const LOJA_COR = {L01:"#1976D2", L02:"#388E3C", L03:"#C2185B", L04:"#E91E63", L05:"#F57C00", L08:"#7B1FA2", L09:"#00838F"};
 function badgeLoja(cod){ return `<span class="badge-loja" style="background:${LOJA_COR[cod]||'#607D8B'}">${cod}</span>`; }
@@ -180,12 +193,24 @@ async function sbIn(montar, col, vals, tam=80){
   return res.flat();
 }
 async function carregarLotes(){
+  const soLoja = nivel(sess.papel)<3 && sess.papel!=="fornecedor" ? sess.loja : null;
+  const chave = [sess.id, soLoja, verLongos, hoje()].join("|");
+  if(!dadosSujos && cache.chaveLotes===chave && Date.now()-(cache.lotesEm||0) < 120000){ cache.lotesReaproveitados = true; return; }
+  cache.lotesReaproveitados = false;
   const data = await sbTodos(()=>{
     let q = sb.from("lotes").select("*, produtos(descricao,secao)").eq("resolvido",false).order("validade").order("id");
-    if(nivel(sess.papel)<3 && sess.papel!=="fornecedor") q = q.eq("loja", sess.loja);
+    if(soLoja) q = q.eq("loja", soLoja);
+    if(!verLongos) q = q.lte("validade", limiteISO());      // vencidos + até o horizonte
     return q;
   });
   cache.lotes = data;
+  // quantos ficaram de fora (só a contagem, sem trazer as linhas)
+  cache.nLongos = 0;
+  if(!verLongos){
+    try{ let qc = sb.from("lotes").select("id",{count:"exact", head:true}).eq("resolvido",false).gt("validade", limiteISO());
+         if(soLoja) qc = qc.eq("loja", soLoja);
+         const {count} = await qc; cache.nLongos = count||0; }catch(e){ cache.nLongos = 0; }
+  }
   // dados por loja dos produtos envolvidos
   const eans = [...new Set(data.map(l=>l.ean))];
   cache.plojas = {};
@@ -197,6 +222,7 @@ async function carregarLotes(){
     cache.vendas = {};
     vd.forEach(v=>{ const k=v.ean+"|"+v.loja; cache.vendas[k]=(cache.vendas[k]||0)+Number(v.qtd); });
   }
+  cache.chaveLotes = chave; cache.lotesEm = Date.now(); dadosSujos = false; cache.histOk = false;
 }
 async function carregarHist(loteId){
   const {data,error} = await sb.from("precos_hist").select("*").eq("lote_id",loteId).order("criado_em");
@@ -438,12 +464,14 @@ async function render(){
   salvarEstadoTela(); aplicarRolagem();
 }
 async function histTodos(){
+  if(cache.lotesReaproveitados && cache.histOk) return;
   const ids = cache.lotes.map(l=>l.id);
   cache.hist = {};
   if(!ids.length) return;
   const data = await sbIn(()=>sb.from("precos_hist").select("*").order("criado_em").order("id"), "lote_id", ids, 60);
   data.sort((a,b)=>String(a.criado_em).localeCompare(String(b.criado_em)));
   data.forEach(h=>{ (cache.hist[h.lote_id]=cache.hist[h.lote_id]||[]).push(h); });
+  cache.histOk = true;
 }
 
 /* ================= LOGIN ================= */
@@ -711,7 +739,7 @@ async function salvarContagem(){
 function vCalendario(){
   const pendVenc = cache.lotes.filter(l=>diasAte(l.validade)<0 && !l.resolvido && Number(l.qtd_restante)>0);
   const zerados = cache.lotes.filter(l=>(l.zerado || (diasAte(l.validade)<0 && Number(l.qtd_restante)<=0)) && !l.resolvido);
-  const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0 && diasAte(l.validade)<=60);
+  const ativos = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0 && diasAte(l.validade)<=HORIZONTE_DIAS);
   const grupos={};
   ativos.forEach(l=>{ (grupos[l.validade]=grupos[l.validade]||[]).push(l); });
   let html = pendVenc.map(l=>{
@@ -736,7 +764,7 @@ function vCalendario(){
         <button class="btn-s btn-sm" style="margin:0; width:auto;" onclick="resolver('${l.id}')">Já está no preço normal</button>
       </div></div>`;
   }).join("");
-  if(!Object.keys(grupos).length && !zerados.length) html+='<div class="card"><p class="muted">Nenhum item com data crítica nos próximos 60 dias.</p></div>';
+  if(!Object.keys(grupos).length && !zerados.length) html+='<div class="card"><p class="muted">Nenhum item com data crítica nos próximos '+HORIZONTE_DIAS+' dias.</p></div>';
   for(const [data,ls] of Object.entries(grupos)){
     const d=diasAte(data), b=bucket(d);
     html += `<div class="grp-date"><span class="badge" style="background:${b.cor}">${d<=0?"VENCE HOJE":"faltam "+d+" dias"}</span> ${fmtData(data)}</div>
@@ -919,6 +947,56 @@ async function normalizarZerado(id){
   }catch(e){ erroDB(e); }
   loading(false); render();
 }
+/* ===== AVISO "RETIRAR A PLACA" =====
+   Lote que estava em rebaixa e vendeu a quantidade (zerou): o gerente tira a placa e confirma aqui.
+   Quem confirmou e quando ficam no histórico de preços do lote ("placa retirada"). */
+function lotesRetirarPlaca(){
+  return cache.lotes.filter(l=> l.zerado && !l.resolvido && (Number(l.preco_atual)||0) > 0 && Number(l.preco_atual) < precoNormal(l) - 0.004)
+    .sort((a,b)=> a.loja.localeCompare(b.loja) || String(a.validade).localeCompare(String(b.validade)));
+}
+let placasVerTodas = false;
+/* Cada gerente vê só a loja dele (a loja do cadastro). Quem acompanha a rede toca em "Todas as lojas"
+   uma vez e o aparelho lembra a escolha. */
+// A central cadastra quase todo mundo na L01: quem é da L01 abre em "Todas as lojas"; o gerente da Veneza
+// toca em "Minha loja" uma vez e o aparelho guarda. Gestor de qualquer outra loja abre só na loja dele.
+const avisoTodasLojas = ()=>{ try{ const v = localStorage.getItem("dc_aviso_todas"); if(v!==null) return v==="1"; }catch(e){} return sess && sess.loja==="L01"; };
+function setAvisoTodas(on){ try{ localStorage.setItem("dc_aviso_todas", on?"1":"0"); }catch(e){} render(); }
+function faixaPlacas(){
+  const todosAvisos = lotesRetirarPlaca();
+  const minha = sess.loja || null, todas = !minha || avisoTodasLojas();
+  const ls = todas ? todosAvisos : todosAvisos.filter(l=>l.loja===minha);
+  const outras = todosAvisos.length - ls.length;
+  const seletor = minha ? `<div style="display:flex; gap:6px; margin:0 0 8px;">
+      <button class="chip ${!todas?'chip-on':''}" style="padding:4px 10px; font-size:12px;" onclick="setAvisoTodas(false)">Minha loja (${minha})</button>
+      <button class="chip ${todas?'chip-on':''}" style="padding:4px 10px; font-size:12px;" onclick="setAvisoTodas(true)">Todas as lojas${!todas && outras ? ' · '+outras : ''}</button></div>` : "";
+  if(!ls.length) return (!todas && outras) ? `<div class="alertbox" style="background:#F1F4F8; color:#455A64; border:1px solid #DDE3EA; font-size:13px;">🪧 Nenhuma placa para retirar na ${LOJAS[minha]||minha}. ${seletor}</div>` : "";
+  const mostra = placasVerTodas ? ls : ls.slice(0,6);
+  return `<div class="alertbox" style="background:#FFF8E1; border:2px solid #F9A825; color:#5D4200;">
+    <div style="font-size:15px; font-weight:800; margin-bottom:4px;">🪧 Retirar placa de rebaixa — ${ls.length} item(ns)${todas ? '' : ' · '+(LOJAS[minha]||minha)}</div>
+    ${seletor}
+    <div style="font-size:12.5px; margin-bottom:8px;">Estes itens venderam a quantidade da rebaixa. Tire a placa, coloque a etiqueta do preço normal e confirme.</div>
+    ${mostra.map(l=>{ const pn = precoNormal(l); return `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-top:1px solid #F3D98B;">
+      <div style="flex:1; min-width:0;"><div style="font-weight:700;">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
+        <div style="font-size:12px;">rebaixa ${brl(l.preco_atual)} → <b>preço normal ${brl(pn)}</b></div></div>
+      <div style="display:flex; flex-direction:column; gap:4px; flex:none;">
+        <button class="btn-ok btn-sm" style="margin:0; width:auto;" onclick="placaRetirada('${l.id}')">✓ Placa retirada</button>
+        <button class="btn-s btn-sm" style="margin:0; width:auto; font-size:11px;" onclick="normalizarZerado('${l.id}')">Conferir preço no VR</button>
+      </div></div>`; }).join("")}
+    ${ls.length>6 ? `<button class="btn-s btn-sm" style="margin-top:6px; width:auto;" onclick="placasVerTodas=!placasVerTodas; render();">${placasVerTodas?'Mostrar menos':'Ver todos os '+ls.length}</button>` : ""}
+  </div>`;
+}
+async function placaRetirada(id){
+  const l = cache.lotes.find(x=>x.id===id); if(!l) return;
+  const pn = precoNormal(l);
+  loading(true);
+  try{
+    const {error} = await sb.from("lotes").update({resolvido:true, preco_atual:pn}).eq("id",id);
+    if(error) throw error;
+    await sb.from("precos_hist").insert({lote_id:id, preco:pn, aplicado_por:sess.id, aplicado_por_nome:sess.nome+" (placa retirada)"});
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
 async function resolver(id){
   loading(true);
   try{
@@ -975,7 +1053,8 @@ async function vRisco(){
   let linhas, ign = [], abertos = [], fb = [], tratados = new Set();
   try{
     const soLoja = nivel(sess.papel)<3 && sess.loja ? sess.loja : null;
-    linhas = await sbTodos(()=>{ let q = sb.from("risco_validade").select("*").order("dias");
+    // horizonte de 30 dias, MENOS para mercadoria com estoque e sem venda: essa continua aparecendo toda, como antes
+    linhas = await sbTodos(()=>{ let q = sb.from("risco_validade").select("*").or("validade.lte."+limiteISO()+",sem_venda.eq.true").order("dias").order("ean").order("loja");
                                   return soLoja ? q.eq("loja", soLoja) : q; });
     try{ ign = await sbTodos(()=>sb.from("risco_ignorados").select("ean")); }catch(e){ ign = []; }
     try{
@@ -1376,8 +1455,7 @@ async function salvarRetirada(){
 
 /* ================= HORIZONTE DE TRABALHO =================
    Validade muito longe (biscoito, amaciante, kit de cabelo) não é data crítica: polui a Gestão e as Placas.
-   Por padrão só aparece o que vence em até 60 dias (a mesma janela do Calendário); o resto fica atrás de um botão. */
-const HORIZONTE_DIAS = 60;
+   Por padrão só aparece o que vence dentro do HORIZONTE_DIAS (definido no topo); o resto fica atrás de um botão. */
 let verLongos = false;
 function faixaLongos(n){
   if(!n && !verLongos) return "";
@@ -1418,7 +1496,7 @@ function ordenarLotes(arr){
 
 function vGestor(){
   const todosGerais = cache.lotes.filter(l=>Number(l.qtd_restante)>0 || l.zerado);
-  const nLongos = todosGerais.filter(l=>diasAte(l.validade) > HORIZONTE_DIAS).length;
+  const nLongos = verLongos ? todosGerais.filter(l=>diasAte(l.validade) > HORIZONTE_DIAS).length : (cache.nLongos||0);
   const todosLotes = verLongos ? todosGerais : todosGerais.filter(l=>diasAte(l.validade) <= HORIZONTE_DIAS);
   // seções presentes (com contagem)
   const contSec = {};
@@ -1474,7 +1552,7 @@ function vGestor(){
       ${lojasPres.map(lj=>`<button class="chip ${lojaFiltro===lj?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="setLojaFiltro('${lj}')">${lj} <span class="chip-n">${contLoja[lj]}</span></button>`).join("")}
     </div>`;
   }
-  return `
+  return faixaPlacas() + `
   <div class="ress"><div><div class="l">Ressarcimento a demandar dos fornecedores</div><div class="v">${brl(ress)}</div></div><div style="font-size:26px;">🧾</div></div>
   <div class="kpis">
     <div class="kpi red"><div class="v">${brl(risco)}</div><div class="l">Custo em risco${secaoFiltro?' — '+secaoFiltro:''}</div></div>
@@ -2598,7 +2676,7 @@ let placaTam = "A6";
 
 function lotesPlacas(){
   let ls = cache.lotes.filter(l=>!l.zerado && Number(l.qtd_restante)>0 && diasAte(l.validade)>=0);
-  placasLongos = ls.filter(l=>diasAte(l.validade) > HORIZONTE_DIAS).length;
+  placasLongos = verLongos ? ls.filter(l=>diasAte(l.validade) > HORIZONTE_DIAS).length : (cache.nLongos||0);
   if(!verLongos) ls = ls.filter(l=>diasAte(l.validade) <= HORIZONTE_DIAS);
   if(sess.papel==="fornecedor") ls = ls.filter(l=>cache.eansForn && cache.eansForn.has(l.ean));
   const lojaFix = (sess.papel==="gestor"||sess.papel==="fornecedor") ? placaFiltro.loja : sess.loja;
