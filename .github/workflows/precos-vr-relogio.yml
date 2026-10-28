@@ -18,7 +18,7 @@ concurrency:
 jobs:
   relogio:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - name: Chamar o servidor de preços
         run: |
@@ -33,3 +33,16 @@ jobs:
           echo "### Preços no VR — $(TZ=America/Recife date '+%d/%m %H:%M')" >> "$GITHUB_STEP_SUMMARY"
           echo "Servidor: $ok · agendados aguardando a data: $pend" >> "$GITHUB_STEP_SUMMARY"
           echo "Servidor: $ok · pendentes: $pend"
+
+      # Rebaixa que vendeu a quantidade no VR: marca o lote como zerado no Data Crítica
+      # na hora, para o gerente receber o aviso "Retirar placa de rebaixa" (pedido de 28/10/2026).
+      - name: Baixar este repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Avisar o gerente (lote zerado no app)
+        continue-on-error: true
+        env:
+          VR_URL: ${{ secrets.VR_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 scripts/zerar_vendidos_vr.py
