@@ -46,6 +46,7 @@
   .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:700; color:#fff;}
   .badge-loja{display:inline-block; padding:2px 7px; border-radius:6px; font-size:11px; font-weight:800; color:#fff; letter-spacing:.3px; margin-right:6px;}
   .chip{display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border:1px solid var(--line); border-radius:20px; background:#fff; color:var(--ink); font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; margin:0; width:auto;}
+  @media (max-width:600px){ .fd-pc{display:none;} } @media (min-width:601px){ .fd-pm{display:none;} }
   .chip.chip-on{background:var(--navy); color:#fff; border-color:var(--navy);}
   .chip-n{background:rgba(0,0,0,.08); color:inherit; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:700;}
   .chip.chip-on .chip-n{background:rgba(255,255,255,.2);}
@@ -2922,10 +2923,10 @@ async function vFornecDet(param){
   const ids = String(param.ids ?? param.id ?? "").split(",").map(x=>parseInt(x)).filter(Boolean);
   const mes = param.mes || mesAtual();
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
-  const {data:ress,error:eR} = await sb.from("ressarcimento_diario")
-    .select("*")
-    .in("id_fornecedor",ids).gte("data",ini).lt("data",fim).order("data",{ascending:true});
-  if(eR){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${eR.message}</div>`; return; }
+  let ress = [];
+  try{ ress = await sbTodos(()=>sb.from("ressarcimento_diario").select("*")
+         .in("id_fornecedor",ids).gte("data",ini).lt("data",fim).order("data",{ascending:true}).order("lote_id")); }
+  catch(eR){ document.getElementById("view").innerHTML=`<div class="alertbox a-red">${eR.message||eR}</div>`; return; }
   const {data:pags} = await sb.from("pagamentos_fornecedor").select("*").in("id_fornecedor",ids).eq("mes_referencia",mes).order("criado_em");
   const lotesVencIds = [...new Set((ress||[]).filter(r=>Number(r.preco_vigente)===0 && r.lote_id).map(r=>r.lote_id))];
   let descartesV = [];
@@ -2935,11 +2936,17 @@ async function vFornecDet(param){
   const ressPorLote = {}; (ress||[]).forEach(r=>{ if(r.lote_id && !ressPorLote[r.lote_id]) ressPorLote[r.lote_id]=r; });
   // buscar descrições dos produtos separadamente (sem depender de FK no embed)
   const eans = [...new Set((ress||[]).map(r=>r.ean))];
-  const descrMap = {};
+  const descrMap = {}, secMap = {};
   if(eans.length){
-    const {data:prods} = await sb.from("produtos").select("ean,descricao").in("ean",eans);
-    (prods||[]).forEach(p=>{ descrMap[p.ean] = p.descricao; });
+    const prods = await sbIn(()=>sb.from("produtos").select("ean,descricao,secao").order("ean"), "ean", eans);
+    (prods||[]).forEach(p=>{ descrMap[p.ean] = p.descricao; secMap[p.ean] = p.secao || "(sem seção)"; });
   }
+  const descPorLote = {}; descartesV.forEach(d=>{ descPorLote[d.lote_id] = d; });
+  if(!fdCache || String(fdCache.ids)!==String(ids) || fdCache.mes!==mes) fdF = { loja:"", secao:"", tipo:"", de:"", ate:"", agrupar:fdF.agrupar };
+  fdCache = { ids, mes, rows: (ress||[]).map(r=>{
+    const pn = Number(r.preco_normal)||0, pv = Number(r.preco_vigente)||0, q = Number(r.qtd_vendida)||0;
+    return { data:String(r.data).slice(0,10), ean:r.ean, loja:r.loja, desc:descrMap[r.ean]||r.ean, secao:secMap[r.ean]||"(sem seção)",
+             tipo: tipoQuebra(r, descPorLote[r.lote_id]), qtd:q, pn, pv, valor:Number(r.valor)||0 }; }) };
 
   // agrupar por EAN+loja
   const grupos = {};
@@ -2955,6 +2962,7 @@ async function vFornecDet(param){
   const totGer = itens.reduce((a,x)=>a+x.valor,0);
   const totPag = (pags||[]).reduce((a,x)=>a+Number(x.valor||0),0);
   const saldo = totGer - totPag;
+  fdCache.nome = nome; fdCache.totPag = totPag;
 
   document.getElementById("view").innerHTML = `
   <div class="card">
@@ -2970,6 +2978,8 @@ async function vFornecDet(param){
     </div>
   </div>
 
+  <h3 class="sec">📊 Relatório de cobrança — valores dia a dia</h3>
+  <div id="fdRel"></div>
   ${descartesV.length? `<h3 class="sec">🗑 Comprovantes de descarte</h3>
   <div class="card" style="padding:6px 16px;">
   ${descartesV.map(d=>{
@@ -2995,22 +3005,173 @@ async function vFornecDet(param){
     ${pags.map(p=>`<div class="item"><div><div class="t">${brl(p.valor)}</div><div class="s">${fmtData(p.criado_em)} · ${p.aval_por_nome||'?'} · ${p.descricao||''}</div></div>${sess.papel==='gestor'?`<button class="btn-s btn-sm" style="flex:0 0 auto; margin:0;" onclick="excluirPagamento(${p.id})">Excluir</button>`:''}</div>`).join("")}
   </div>`:''}
 
-  <h3 class="sec">Itens ressarcidos</h3>
-  <div class="card" style="padding:6px 16px;">
-  ${itens.length? itens.map(i=>{
-    const dias = Object.entries(i.dias).sort();
-    return `<div class="item" style="flex-direction:column; align-items:stretch;">
-      <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-        <div style="flex:1;"><div class="t">${badgeLoja(i.loja)}${i.descricao||i.ean}</div>
-        <div class="s">${LOJAS[i.loja]||i.loja} · ${Math.round(i.unidades)} un vendidas com desconto</div></div>
-        <div class="num" style="color:var(--danger)">${brl(i.valor)}</div>
-      </div>
-      <details style="margin-top:8px; font-size:12px; color:var(--mut);"><summary style="cursor:pointer;">Detalhamento por dia (${dias.length})</summary>
-      <div style="padding:8px 0; font-family:ui-monospace,Menlo,monospace;">${dias.map(([d,v])=>`${fmtData(d)} — ${brl(v)}`).join("<br>")}</div>
-      </details>
-    </div>`;
-  }).join("") : '<p class="muted">Sem itens neste mês.</p>'}
+`;
+  fdDesenhar();
+}
+
+/* ===== RELATÓRIO DE COBRANÇA FILTRÁVEL (por loja, seção, tipo de quebra, período) ===== */
+let fdCache = null;
+let fdF = { loja:"", secao:"", tipo:"", de:"", ate:"", agrupar:"dia" };
+const TIPOS_QUEBRA = ["Rebaixa", "Vencido com acompanhamento", "Vencido sem acompanhamento", "Avaria"];
+const COR_TIPO = {"Rebaixa":"#1565C0", "Vencido com acompanhamento":"#C62828", "Vencido sem acompanhamento":"#6A1B9A", "Avaria":"#E65100"};
+function tipoQuebra(r, d){
+  if(Number(r.preco_vigente) > 0) return "Rebaixa";
+  const v = String((d && d.validado_por) || "");
+  const m = v.match(/retirada sem acompanhamento \(([^)]*)\)/i);
+  if(m) return /vencid/i.test(m[1]) ? "Vencido sem acompanhamento" : "Avaria";
+  if(d && Number(d.qtd_contada) === 0) return "Vencido sem acompanhamento";
+  return "Vencido com acompanhamento";
+}
+function fdFiltrar(){
+  if(!fdCache) return [];
+  return fdCache.rows.filter(r=>(!fdF.loja || r.loja===fdF.loja) && (!fdF.secao || r.secao===fdF.secao) && (!fdF.tipo || r.tipo===fdF.tipo)
+    && (!fdF.de || r.data>=fdF.de) && (!fdF.ate || r.data<=fdF.ate));
+}
+function fdSet(k, v){ fdF[k] = v; fdDesenhar(); }
+function fdLimpar(){ fdF = { loja:"", secao:"", tipo:"", de:"", ate:"", agrupar:fdF.agrupar }; fdDesenhar(); }
+function fdAgrupar(rows, modo){
+  const g = {};
+  rows.forEach(r=>{
+    const k = modo==="dia" ? r.data : modo==="loja" ? r.loja : modo==="secao" ? r.secao : modo==="tipo" ? r.tipo : r.ean+"|"+r.loja;
+    const x = g[k] || (g[k] = {k, rows:[], valor:0, qtd:0});
+    x.rows.push(r); x.valor += r.valor; x.qtd += r.qtd;
+  });
+  const lista = Object.values(g);
+  if(modo==="dia") lista.sort((a,b)=>a.k.localeCompare(b.k)); else lista.sort((a,b)=>b.valor-a.valor);
+  return lista;
+}
+const fdQtd = q => (Math.round(q*1000)/1000).toLocaleString("pt-BR");
+function fdDesenhar(){
+  const box = document.getElementById("fdRel"); if(!box || !fdCache) return;
+  const todos = fdCache.rows, rows = fdFiltrar();
+  const lojas = [...new Set(todos.map(r=>r.loja))].sort();
+  const secoes = [...new Set(todos.map(r=>r.secao))].sort();
+  const tot = rows.reduce((a,r)=>a+r.valor,0);
+  const porTipo = {}; rows.forEach(r=>{ porTipo[r.tipo] = (porTipo[r.tipo]||0) + r.valor; });
+  const chip = (txt, on, fn) => `<button class="chip ${on?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="${fn}">${txt}</button>`;
+  const grupos = fdAgrupar(rows, fdF.agrupar);
+  let acum = 0;
+  const cab = {dia:"Dia", item:"Item", loja:"Loja", secao:"Seção", tipo:"Tipo de quebra"}[fdF.agrupar];
+  const linhaDet = r => `<tr style="font-size:12px; color:#455A64;"><td style="padding:3px 6px 3px 18px;">${fdF.agrupar==="dia"?"":fmtData(r.data)+" · "}${badgeLoja(r.loja)}${r.desc}<div style="font-size:11px;">${r.secao} · <span style="color:${COR_TIPO[r.tipo]}">${r.tipo}</span><span class="fd-pm"> · ${r.pv>0?`${brl(r.pn)} → ${brl(r.pv)}`:`custo ${brl(r.pn)}`}</span></div></td>
+      <td style="text-align:right; white-space:nowrap;">${fdQtd(r.qtd)}</td>
+      <td class="fd-pc" style="text-align:right; white-space:nowrap;">${r.pv>0?`${brl(r.pn)} → ${brl(r.pv)}`:`custo ${brl(r.pn)}`}</td>
+      <td style="text-align:right; white-space:nowrap;">${brl(r.valor)}</td><td></td></tr>`;
+  const corpo = grupos.map((g,i)=>{
+    acum += g.valor;
+    const r0 = g.rows[0];
+    const titulo = fdF.agrupar==="dia" ? `${fmtData(g.k)} <span class="muted" style="font-weight:400;">· ${g.rows.length} lançamento(s)</span>`
+      : fdF.agrupar==="item" ? `${badgeLoja(r0.loja)}${r0.desc}<div class="muted" style="font-size:11px; font-weight:400;">${r0.secao} · ${[...new Set(g.rows.map(x=>x.tipo))].join(", ")} · ${g.rows.length} dia(s)</div>`
+      : fdF.agrupar==="loja" ? (LOJAS[g.k]||g.k) : g.k;
+    return `<tbody><tr style="cursor:pointer; border-top:1px solid #E3E8EE;" onclick="const t=this.parentNode.nextElementSibling; t.style.display=t.style.display==='none'?'':'none';">
+      <td style="padding:8px 6px; font-weight:700;">▸ ${titulo}</td>
+      <td style="text-align:right; white-space:nowrap; padding:0 6px;">${fdQtd(g.qtd)}</td><td class="fd-pc"></td>
+      <td style="text-align:right; white-space:nowrap; font-weight:700; color:var(--danger);">${brl(g.valor)}</td>
+      <td style="text-align:right; white-space:nowrap; color:#5A6B7D;">${fdF.agrupar==="dia"?brl(acum):((g.valor/(tot||1))*100).toFixed(1).replace(".",",")+"%"}</td></tr></tbody>
+      <tbody style="display:none;">${g.rows.slice().sort((a,b)=>a.data.localeCompare(b.data)||b.valor-a.valor).map(linhaDet).join("")}</tbody>`;
+  }).join("");
+  box.innerHTML = `
+  <div class="card" style="padding:12px 14px;">
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--mut);">
+      <span>Loja:</span>${chip("Todas", !fdF.loja, "fdSet('loja','')")}${lojas.map(lj=>chip(lj, fdF.loja===lj, `fdSet('loja','${lj}')`)).join("")}
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--mut); margin-top:6px;">
+      <span>Tipo:</span>${chip("Todos", !fdF.tipo, "fdSet('tipo','')")}${TIPOS_QUEBRA.filter(t=>todos.some(r=>r.tipo===t)).map(t=>chip(t, fdF.tipo===t, `fdSet('tipo','${t}')`)).join("")}
+    </div>
+    <div class="row" style="margin-top:8px; gap:8px; flex-wrap:wrap;">
+      <select style="flex:2; min-width:160px; margin:14px 0 0;" onchange="fdSet('secao', this.value)"><option value="">Todas as seções</option>${secoes.map(x=>`<option ${fdF.secao===x?'selected':''}>${x}</option>`).join("")}</select>
+      <label style="flex:1; min-width:130px; margin:0; font-size:11px; color:var(--mut);">De<input type="date" style="margin:2px 0 0;" value="${fdF.de}" onchange="fdSet('de', this.value)"></label>
+      <label style="flex:1; min-width:130px; margin:0; font-size:11px; color:var(--mut);">Até<input type="date" style="margin:2px 0 0;" value="${fdF.ate}" onchange="fdSet('ate', this.value)"></label>
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--mut); margin-top:8px;">
+      <span>Ver por:</span>${[["dia","Dia"],["item","Item"],["loja","Loja"],["secao","Seção"],["tipo","Tipo"]].map(([k,t])=>chip(t, fdF.agrupar===k, `fdSet('agrupar','${k}')`)).join("")}
+      <button class="btn-s btn-sm" style="margin:0 0 0 auto; width:auto;" onclick="fdLimpar()">Limpar filtros</button>
+    </div>
+  </div>
+  <div class="kpis" style="flex-wrap:wrap;">
+    <div class="kpi" style="min-width:140px;"><div class="v" style="color:var(--danger)">${brl(tot)}</div><div class="l">Total no filtro (${rows.length} lançamentos)</div></div>
+    ${TIPOS_QUEBRA.filter(t=>porTipo[t]).map(t=>`<div class="kpi" style="min-width:140px;"><div class="v" style="color:${COR_TIPO[t]}">${brl(porTipo[t])}</div><div class="l">${t}</div></div>`).join("")}
+  </div>
+  <button class="btn-p" onclick="pdfFornecFiltro()">🖨 PDF deste relatório (com os filtros)</button>
+  <div class="card" style="padding:6px 8px;">
+    ${rows.length ? `<table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead style="position:sticky; top:0; background:#fff; z-index:2;"><tr style="color:var(--mut); font-size:11px; text-align:right;">
+        <th style="text-align:left; padding:6px;">${cab} <span style="font-weight:400;">(toque para abrir)</span></th><th style="padding:0 6px;">Qtd</th><th class="fd-pc" style="padding:0 6px;">Preço</th><th style="padding:0 6px;">Valor</th><th>${fdF.agrupar==="dia"?"Acumulado":"% do total"}</th></tr></thead>
+      ${corpo}
+      <tbody><tr style="border-top:2px solid #CFD8DC; font-weight:800;"><td style="padding:8px 6px;">TOTAL</td><td></td><td class="fd-pc"></td><td style="text-align:right; color:var(--danger);">${brl(tot)}</td><td></td></tr></tbody>
+    </table>` : '<p class="muted" style="padding:10px;">Nada neste filtro.</p>'}
   </div>`;
+}
+
+/* PDF do relatório com os filtros aplicados: resumo, tabela agrupada e o detalhamento diário (base do pagamento). */
+function pdfFornecFiltro(){
+  if(!window.jspdf) return alert("Biblioteca de PDF ainda carregando — tente de novo em 2 segundos.");
+  if(!fdCache) return;
+  const rows = fdFiltrar(); if(!rows.length) return alert("Nada neste filtro para imprimir.");
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:"mm", format:"a4"});
+  const M = 10, W = 190, PH = 297, navy = [14,42,71];
+  let y = 0;
+  const tot = rows.reduce((a,r)=>a+r.valor,0);
+  const filtros = [fdF.loja?LOJAS[fdF.loja]||fdF.loja:"Todas as lojas", fdF.secao||"Todas as seções", fdF.tipo||"Todos os tipos",
+    (fdF.de||fdF.ate) ? `de ${fdF.de?fmtData(fdF.de):"início"} até ${fdF.ate?fmtData(fdF.ate):"fim do mês"}` : mesLabel(fdCache.mes)].join("  ·  ");
+  const emitido = new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  const cabecalho = ()=>{
+    doc.setFillColor(...navy); doc.rect(0,0,210,22,"F");
+    doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+    doc.text(`Rende Mais · Ressarcimento — ${fdCache.nome}`.slice(0,90), M, 9);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5);
+    doc.text(doc.splitTextToSize(filtros, W)[0], M, 15); doc.text(`Emitido em ${emitido} por ${sess.nome}`, M, 19.5);
+    doc.setTextColor(0); y = 28;
+  };
+  const rodape = ()=>{};
+  const nova = ()=>{ doc.addPage(); cabecalho(); };
+  const tabela = (cols, linhas, opts={})=>{
+    const desenhaCab = ()=>{ doc.setFillColor(232,236,242); doc.rect(M,y,W,6,"F"); doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(40);
+      let x=M; cols.forEach(c=>{ doc.text(c.t, c.r? x+c.w-1.5 : x+1.5, y+4, {align:c.r?"right":"left"}); x+=c.w; }); doc.setTextColor(0); y+=6; };
+    desenhaCab();
+    linhas.forEach((ln,i)=>{
+      doc.setFont("helvetica", ln.bold?"bold":"normal"); doc.setFontSize(7.5);
+      const partes = cols.map((c,j)=> doc.splitTextToSize(String(ln.v[j]??""), c.w-3).slice(0,2));
+      const h = Math.max(...partes.map(p=>p.length))*3.2 + 2.6;
+      if(y + h > PH-14){ nova(); desenhaCab(); doc.setFont("helvetica", ln.bold?"bold":"normal"); doc.setFontSize(7.5); }
+      if(ln.fundo){ doc.setFillColor(...ln.fundo); doc.rect(M,y,W,h,"F"); } else if(i%2){ doc.setFillColor(247,248,250); doc.rect(M,y,W,h,"F"); }
+      let x=M; cols.forEach((c,j)=>{ doc.text(partes[j], c.r? x+c.w-1.5 : x+1.5, y+3.4, {align:c.r?"right":"left"}); x+=c.w; });
+      y += h;
+    });
+    y += 4;
+  };
+  cabecalho();
+  // resumo
+  doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text(`Total a ressarcir no filtro: ${brl(tot)}`, M, y+2); y += 6;
+  const porTipo = {}; rows.forEach(r=>{ porTipo[r.tipo]=(porTipo[r.tipo]||0)+r.valor; });
+  tabela([{t:"Tipo de quebra",w:120},{t:"Lançamentos",w:30,r:1},{t:"Valor",w:40,r:1}],
+    TIPOS_QUEBRA.filter(t=>porTipo[t]).map(t=>({v:[t, rows.filter(r=>r.tipo===t).length, brl(porTipo[t])]})));
+  // agrupado
+  const modo = fdF.agrupar, grupos = fdAgrupar(rows, modo);
+  const nomeModo = {dia:"Por dia", item:"Por item", loja:"Por loja", secao:"Por seção", tipo:"Por tipo de quebra"}[modo];
+  doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.text(nomeModo, M, y+1); y += 4;
+  let acum = 0;
+  tabela([{t:{dia:"Dia",item:"Item",loja:"Loja",secao:"Seção",tipo:"Tipo"}[modo],w:110},{t:"Qtd",w:20,r:1},{t:"Valor",w:30,r:1},{t:modo==="dia"?"Acumulado":"% do total",w:30,r:1}],
+    grupos.map(g=>{ acum+=g.valor; const r0=g.rows[0];
+      const nome = modo==="dia"?fmtData(g.k):modo==="item"?`${r0.loja} · ${r0.desc}`:modo==="loja"?(LOJAS[g.k]||g.k):g.k;
+      return {v:[nome, fdQtd(g.qtd), brl(g.valor), modo==="dia"?brl(acum):((g.valor/(tot||1))*100).toFixed(1).replace(".",",")+"%"]}; })
+    .concat([{v:["TOTAL","",brl(tot),""], bold:true, fundo:[232,236,242]}]));
+  // detalhamento diário (base do pagamento)
+  if(y > PH-40) nova();
+  doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.text("Detalhamento diário — base do ressarcimento", M, y+1); y += 4;
+  tabela([{t:"Data",w:17},{t:"Loja",w:11},{t:"Item",w:62},{t:"Tipo",w:30},{t:"Qtd",w:14,r:1},{t:"Preço normal",w:19,r:1},{t:"Praticado",w:17,r:1},{t:"Valor",w:20,r:1}],
+    rows.slice().sort((a,b)=>a.data.localeCompare(b.data)||a.loja.localeCompare(b.loja)||b.valor-a.valor)
+      .map(r=>({v:[fmtData(r.data), r.loja, r.desc, r.tipo.replace(" acompanhamento"," acomp."), fdQtd(r.qtd), brl(r.pn), r.pv>0?brl(r.pv):"descarte", brl(r.valor)]}))
+      .concat([{v:["","","TOTAL","","","","",brl(tot)], bold:true, fundo:[232,236,242]}]));
+  if(fdCache.totPag && !fdF.loja && !fdF.secao && !fdF.tipo && !fdF.de && !fdF.ate){
+    doc.setFont("helvetica","normal"); doc.setFontSize(9);
+    if(y > PH-24) nova();
+    doc.text(`Já ressarcido no mês: ${brl(fdCache.totPag)}   ·   Saldo devedor: ${brl(tot - fdCache.totPag)}`, M, y+2);
+  }
+  const n = doc.getNumberOfPages();
+  for(let i=1;i<=n;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Página ${i} de ${n}`, 200, PH-6, {align:"right"}); }
+  const slug = String(fdCache.nome).normalize("NFD").replace(/[^\w]+/g,"_").slice(0,30);
+  doc.save(`ressarcimento_${slug}_${fdCache.mes}${fdF.loja?"_"+fdF.loja:""}.pdf`);
 }
 
 /* ---- PDF do acompanhamento do fornecedor (para negociação) ---- */
