@@ -148,9 +148,24 @@ function hoje(){ return new Date().toISOString().slice(0,10); }
 function diasAte(v){ const a=new Date(hoje()+"T12:00"), b=new Date(v+"T12:00"); return Math.round((b-a)/86400000); }
 function brl(n){ return (Number(n)||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
 function fmtData(v){ const [y,m,d]=String(v).slice(0,10).split("-"); return d+"/"+m+"/"+y; }
+function __sha256js(ascii){function rr(v,a){return (v>>>a)|(v<<(32-a));}var mp=Math.pow,mw=mp(2,32),result="",words=[],bits=ascii.length*8,h0=[],k=[],comp={},pc=0;
+for(var c=2;pc<64;c++){if(!comp[c]){for(var i=0;i<313;i+=c)comp[i]=c;h0[pc]=(mp(c,.5)*mw)|0;k[pc++]=(mp(c,1/3)*mw)|0;}}
+ascii+="\x80";while(ascii.length%64-56)ascii+="\x00";
+for(var i2=0;i2<ascii.length;i2++){var j=ascii.charCodeAt(i2);words[i2>>2]|=j<<((3-i2)%4)*8;}
+words[words.length]=((bits/mw)|0);words[words.length]=bits;var hash=h0.slice(0,8);
+for(var j2=0;j2<words.length;){var w=words.slice(j2,j2+=16),old=hash.slice(0,8);
+for(var t=0;t<64;t++){var w15=w[t-15],w2=w[t-2],a=hash[0],e=hash[4];
+var t1=(hash[7]+(rr(e,6)^rr(e,11)^rr(e,25))+((e&hash[5])^((~e)&hash[6]))+k[t]+(w[t]=(t<16)?w[t]:(w[t-16]+(rr(w15,7)^rr(w15,18)^(w15>>>3))+w[t-7]+(rr(w2,17)^rr(w2,19)^(w2>>>10)))|0))|0;
+var t2=((rr(a,2)^rr(a,13)^rr(a,22))+((a&hash[1])^(a&hash[2])^(hash[1]&hash[2])))|0;hash=[(t1+t2)|0].concat(hash);hash[4]=(hash[4]+t1)|0;}
+for(var q=0;q<8;q++)hash[q]=(hash[q]+old[q])|0;hash=hash.slice(0,8);}
+for(var r=0;r<8;r++)for(var b=3;b+1;b--){var by=(hash[r]>>(b*8))&255;result+=((by<16)?"0":"")+by.toString(16);}return result;}
+function __ssoLer(){ try{ const m=location.hash.match(/sso=([^&]+)/); if(!m) return null; const o=JSON.parse(atob(decodeURIComponent(m[1]))); history.replaceState(null,'',location.pathname+location.search); return (o&&o.id&&o.h)?o:null; }catch(e){ return null; } }
+// dentro do Portal do Fornecedor (página http) o navegador não libera crypto.subtle: cai no cálculo em JS puro
 async function sha256(t){
-  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
-  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  if(window.isSecureContext && window.crypto && crypto.subtle){ try{
+    const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+    return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join(""); }catch(e){} }
+  return __sha256js(unescape(encodeURIComponent(t)));
 }
 function loading(on){ document.getElementById("loader").style.display = on?"flex":"none"; }
 function erroDB(e){ console.error(e); alert("Falha de comunicação com o banco: "+(e.message||e)+"\nVerifique a internet e tente de novo."); }
@@ -3557,6 +3572,11 @@ window.onerror = function(msg,src,line){
   return false;
 };
 (async ()=>{
+  try{                                   // entrada automática vinda do Portal do Fornecedor (#sso=)
+    const o = __ssoLer();
+    if(o){ const {data:u} = await sb.from("usuarios").select("*").eq("id",o.id).eq("ativo",true).maybeSingle();
+      if(u && u.pin_hash===o.h) localStorage.setItem("dc_sess", JSON.stringify({id:u.id})); }
+  }catch(e){}
   try{
     const salvo = localStorage.getItem("dc_sess");
     if(salvo){
