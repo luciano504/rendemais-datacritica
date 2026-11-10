@@ -186,7 +186,7 @@ async function carregarUsuarios(){
   cache.usuarios = data;
 }
 async function carregarEansForn(){
-  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").split(",").map(x=>parseInt(x)).filter(Boolean);
+  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").replace(/[\[\]{}\s"]/g,"").split(",").map(x=>parseInt(x)).filter(Boolean);
   if(!idsF.length){ cache.eansForn = new Set(); return; }
   const {data} = await sb.from("produtos_loja").select("ean").in("id_fornecedor", idsF);
   cache.eansForn = new Set((data||[]).map(p=>p.ean));
@@ -2532,7 +2532,7 @@ let fornMes = null;
 function setFornLoja(v){ fornLojaSel = v||null; render(); }
 function setFornMes(m){ fornMes = m; render(); }
 async function vFornHome(){
-  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").split(",").map(x=>parseInt(x)).filter(Boolean);
+  const idsF = String(sess.ids_fornecedor || sess.id_fornecedor || "").replace(/[\[\]{}\s"]/g,"").split(",").map(x=>parseInt(x)).filter(Boolean);
   if(!idsF.length) return `<div class="alertbox a-red">Seu usuário não está vinculado a nenhum fornecedor. Fale com o gestor da rede.</div>`;
   // Produtos do fornecedor por EAN: se ele fornece o produto em qualquer loja, vê os lotes em TODAS as lojas
   const {data:pls} = await sb.from("produtos_loja").select("ean,nome_fornecedor").in("id_fornecedor", idsF);
