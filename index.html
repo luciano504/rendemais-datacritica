@@ -3433,7 +3433,7 @@ async function marcarEnviado(){
 
 
 /* ================= ITENS DA QUEBRA POR LOJA (Gestor) ================= */
-let plF = { tipo:"", secao:"", busca:"" }, plCache = null;
+let plF = { tipos:[], secao:"", busca:"" }, plCache = null;
 const PL_COL = { "Rebaixa":"rebaixa", "Vencido com acompanhamento":"vencAcomp", "Vencido sem acompanhamento":"vencSem", "Avaria":"vencSem" };
 async function vPerdasLoja(lj){
   const view = document.getElementById("view");
@@ -3456,7 +3456,7 @@ async function vPerdasLoja(lj){
       if(r.nome_fornecedor) x.forn = r.nome_fornecedor;
     });
     const rows = Object.values(g).sort((a,b)=>b.valor-a.valor);
-    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipo:"", secao:"", busca:"" };
+    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipos:[], secao:"", busca:"" };
     plCache = { lj, mes, rows, balanco };
     view.innerHTML = `
     <button class="btn-s" onclick="goBack()" style="margin-bottom:8px;">← Voltar ao índice de perdas</button>
@@ -3465,10 +3465,11 @@ async function vPerdasLoja(lj){
   }catch(e){ view.innerHTML = `<div class="alertbox a-red">${e.message||e}</div>`; }
 }
 function plSet(k,v){ plF[k]=v; plDesenhar(); }
+function plTipo(t){ if(!t){ plF.tipos=[]; } else { const i=plF.tipos.indexOf(t); if(i>=0) plF.tipos.splice(i,1); else plF.tipos.push(t); if(plF.tipos.length===TIPOS_QUEBRA.length) plF.tipos=[]; } plDesenhar(); }
 function plFiltrar(){
   if(!plCache) return [];
   const b = normNome(plF.busca||"");
-  return plCache.rows.filter(r => (!plF.tipo || r.col===plF.tipo) && (!plF.secao || r.secao===plF.secao)
+  return plCache.rows.filter(r => (!plF.tipos.length || plF.tipos.includes(r.tipo)) && (!plF.secao || r.secao===plF.secao)
     && (!b || normNome(r.desc).includes(b) || String(r.ean).includes(b) || normNome(r.forn).includes(b)));
 }
 function plDesenhar(){
@@ -3496,10 +3497,9 @@ function plDesenhar(){
   </div>
   <div class="card">
     <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px;">
-      ${chip("Todos", !plF.tipo, "plSet('tipo','')")}
-      ${chip("Rebaixa", plF.tipo==="rebaixa", "plSet('tipo','rebaixa')")}
-      ${chip("Venc. c/ acomp.", plF.tipo==="vencAcomp", "plSet('tipo','vencAcomp')")}
-      ${chip("Venc. s/ acomp. + avarias", plF.tipo==="vencSem", "plSet('tipo','vencSem')")}
+      <span class="muted" style="font-size:12px;">Tipos (marque quantos quiser):</span>
+      ${chip("Todos", !plF.tipos.length, "plTipo('')")}
+      ${TIPOS_QUEBRA.map((t,i)=>chip((plF.tipos.includes(t)?"✓ ":"")+t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp."), plF.tipos.includes(t), `plTipo(TIPOS_QUEBRA[${i}])`)).join("")}
     </div>
     <div class="row">
       <div><label>Seção</label><select onchange="plSet('secao',this.value)"><option value="">Todas</option>${secoes.map(x=>`<option ${plF.secao===x?'selected':''}>${x}</option>`).join("")}</select></div>
@@ -3557,7 +3557,7 @@ function plPDF(){
   const soma = col => plCache.rows.filter(r=>r.col===col).reduce((a,r)=>a+r.valor,0);
   const tR = soma("rebaixa"), tA = soma("vencAcomp"), tS = soma("vencSem"), ident = tR+tA+tS;
   const emitido = new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
-  const filtros = [plF.tipo?({rebaixa:"Rebaixa",vencAcomp:"Vencidas c/ acomp.",vencSem:"Vencidas s/ acomp. + avarias"})[plF.tipo]:"Todos os tipos", plF.secao||"Todas as seções", plF.busca?`busca "${plF.busca}"`:""].filter(Boolean).join("  ·  ");
+  const filtros = [plF.tipos.length? plF.tipos.map(t=>t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.")).join(" + ") : "Todos os tipos", plF.secao||"Todas as seções", plF.busca?`busca "${plF.busca}"`:""].filter(Boolean).join("  ·  ");
   let y = 0;
   const cab = ()=>{
     doc.setFillColor(...navy); doc.rect(0,0,210,22,"F");
