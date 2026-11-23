@@ -440,9 +440,9 @@ async function render(){
     document.getElementById("hSub").textContent = sess.nome+" · "+lojaTxt; }
   else document.getElementById("hSub").textContent = "Controle de mercadorias próximas do vencimento";
   renderNav();
-  v.classList.toggle("wide", ["perdas","fornec","fornecdet","relatorio"].includes(route.page));
+  v.classList.toggle("wide", ["perdas","perdasloja","fornec","fornecdet","relatorio"].includes(route.page));
   // proteção: rotas exclusivas do gestor
-  const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet","perdas"];
+  const rotasGestor = ["gestor","itemdet","relatorio","cadastro","usuario","fornec","fornecdet","perdas","perdasloja"];
   const rotasPrev = ["calendario","placas","retirada","sugestoes","risco"];
   if(sess){
     if(rotasGestor.includes(route.page) && nivel(sess.papel)<3){
@@ -470,6 +470,7 @@ async function render(){
     else if(route.page==="itemdet"){ await carregarLotes(); await carregarSugestoes(); const l=cache.lotes.find(x=>x.id===route.param); if(l) await carregarHist(l.id); v.innerHTML = vItem(route.param); }
     else if(route.page==="risco"){ v.innerHTML = '<div class="card center muted">Calculando o risco…</div>'; await vRisco(); }
     else if(route.page==="sugestoes"){ v.innerHTML = '<div class="card center muted">Carregando sugestões…</div>'; await vSugestoes(); }
+    else if(route.page==="perdasloja"){ v.innerHTML = '<div class="card center muted">Carregando itens da quebra…</div>'; await vPerdasLoja(route.param); }
     else if(route.page==="relatorio"){ await carregarLotes(); await histTodos(); v.innerHTML = vRelatorio(); }
     else if(route.page==="cadastro"){ await carregarUsuarios(); v.innerHTML = await vCadastro(); }
     else if(route.page==="usuario"){ if(nivel(sess.papel)<3){ v.innerHTML='<div class="alertbox a-red">Acesso restrito ao gestor.</div>'; return; } v.innerHTML = vUsuario(route.param); carregarUsuarioEdit(route.param); }
@@ -2351,24 +2352,32 @@ function imprimirRadar(){
   setTimeout(fim, 1500);
 }
 
+/* Base da aba Perdas (compartilhada com a tela "Itens da quebra" por loja).
+   Paginado: o Supabase devolve no máximo 1000 linhas por chamada. */
+let perdasBase = null;
+async function carregarPerdasBase(mes){
+  if(perdasBase && perdasBase.mes===mes && (Date.now()-perdasBase.quando) < 120000) return perdasBase;
+  const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
+  const ress = await sbTodos(()=>sb.from("ressarcimento_diario")
+    .select("lote_id,ean,loja,id_fornecedor,nome_fornecedor,valor,preco_vigente,preco_normal,qtd_vendida,data")
+    .gte("data",ini).lt("data",fim).order("data").order("lote_id"));
+  let descs = []; try{ descs = await sbTodos(()=>sb.from("descartes").select("lote_id,qtd_contada,qtd_validada,validado_por,fotos").eq("status","validado").order("lote_id")); }catch(e){ descs = []; }
+  const descPorLote = {}; (descs||[]).forEach(d=>{ descPorLote[d.lote_id]=d; });
+  const eans = [...new Set((ress||[]).map(r=>r.ean))];
+  const secaoPorEan = {}, descrPorEan = {};
+  for(let i=0;i<eans.length;i+=200){
+    const {data:ps} = await sb.from("produtos").select("ean,secao,descricao").in("ean",eans.slice(i,i+200));
+    (ps||[]).forEach(p=>{ secaoPorEan[p.ean]=p.secao||"(sem seção)"; descrPorEan[p.ean]=p.descricao||p.ean; });
+  }
+  perdasBase = { mes, quando: Date.now(), ress: ress||[], descPorLote, secaoPorEan, descrPorEan };
+  return perdasBase;
+}
 async function vPerdas(){
   const view = document.getElementById("view");
   const mes = perdasMes || mesAtual();
   const ini = mes+"-01", fim = mesPrev(mes,-1)+"-01";
   try{
-    // fontes
-    // paginado: o Supabase devolve no máximo 1000 linhas por chamada
-    const ress = await sbTodos(()=>sb.from("ressarcimento_diario")
-      .select("lote_id,ean,loja,id_fornecedor,nome_fornecedor,valor,preco_vigente,qtd_vendida,data")
-      .gte("data",ini).lt("data",fim).order("data").order("lote_id"));
-    let descs = []; try{ descs = await sbTodos(()=>sb.from("descartes").select("lote_id,qtd_contada,qtd_validada,fotos").eq("status","validado").order("lote_id")); }catch(e){ descs = []; }
-    const descPorLote = {}; (descs||[]).forEach(d=>{ descPorLote[d.lote_id]=d; });
-    const eans = [...new Set((ress||[]).map(r=>r.ean))];
-    const secaoPorEan = {};
-    for(let i=0;i<eans.length;i+=200){
-      const {data:ps} = await sb.from("produtos").select("ean,secao").in("ean",eans.slice(i,i+200));
-      (ps||[]).forEach(p=>{ secaoPorEan[p.ean]=p.secao||"(sem seção)"; });
-    }
+    const { ress, descPorLote, secaoPorEan } = await carregarPerdasBase(mes);
     let compras = [], balancos = [], semCompras = false, semBalancos = false;
     try{ compras = await sbTodos(()=>sb.from("compras_mes").select("*").eq("mes",mes).order("loja").order("id_fornecedor").order("secao")); }catch(e){ semCompras = true; }
     try{ const r = await sb.from("balancos").select("*").eq("mes",mes); if(r.error) throw r.error; balancos = r.data||[]; }catch(e){ semBalancos = true; }
@@ -2408,7 +2417,7 @@ async function vPerdas(){
       const total = ident + d.balanco;
       ["rebaixa","vencAcomp","vencSem","balanco","compras"].forEach(k=>totG[k]+=d[k]);
       return `<tr>
-        <td><b>${LOJAS[lj]||lj}</b></td>
+        <td><b>${LOJAS[lj]||lj}</b><br><button class="btn-sm" style="margin:3px 0 0; padding:3px 8px; font-size:11px; width:auto;" onclick="go('perdasloja','${lj}')">🔎 Itens</button></td>
         <td style="text-align:right;">${brl(d.rebaixa)}</td>
         <td style="text-align:right;">${brl(d.vencAcomp)}</td>
         <td style="text-align:right;">${brl(d.vencSem)}</td>
@@ -2501,6 +2510,34 @@ async function salvarBalanco(lj, mes){
 }
 
 /* ================= PORTAL DO FORNECEDOR ================= */
+const SENHA_NOVO_USUARIO_HASH="afccb1de21e7c87df3b5b8151f83e4f1a694981b892ce23a43ea9c0a214f5494"; // sha-256 da senha de confirmação
+async function criarUsuarioInterno(){
+  const nome = document.getElementById("niNome").value.trim();
+  const papel = document.getElementById("niPapel").value;
+  const loja = document.getElementById("niLoja").value;
+  const pin = document.getElementById("niPin").value.trim();
+  if(!nome) return alert("Informe o nome do usuário.");
+  if(!/^\d{6}$/.test(pin)) return alert("PIN precisa ter exatamente 6 dígitos.");
+  if(!LOJAS[loja]) return alert("Escolha a loja.");
+  const senhaConf = prompt("Senha de confirmação para cadastrar usuário:");
+  if(senhaConf===null) return;
+  if(await sha256(senhaConf.trim()) !== SENHA_NOVO_USUARIO_HASH) return alert("Senha de confirmação incorreta.");
+  loading(true);
+  try{
+    const {data:dup} = await sb.from("usuarios").select("id,nome,ativo").eq("ativo",true);
+    const jaTem = (dup||[]).find(u=>normNome(u.nome)===normNome(nome));
+    if(jaTem){ loading(false); return alert(`Já existe um usuário ativo chamado "${jaTem.nome}". Use outro nome (ex: acrescente o sobrenome).`); }
+    if(!confirm(`Criar usuário interno?\n\nNome: ${nome}\nFunção: ${PAPEIS[papel]}\nLoja: ${LOJAS[loja]}`)){ loading(false); return; }
+    const {error} = await sb.from("usuarios").insert({
+      nome, papel, loja, ativo:true, pin_hash: await sha256(pin)
+    });
+    if(error) throw error;
+    alert(`Usuário criado. Passe o nome "${nome}" e o PIN para a pessoa — ela entra pela tela de login tocando em "Sou outra pessoa".`);
+    document.getElementById("niNome").value=""; document.getElementById("niPin").value="";
+  }catch(e){ erroDB(e); }
+  loading(false); render();
+}
+
 async function criarUsuarioFornecedor(){
   const ids = [...document.querySelectorAll(".fuFornCk:checked")].map(x=>parseInt(x.value));
   const idf = ids[0];
@@ -3394,6 +3431,173 @@ async function marcarEnviado(){
   loading(false); goBack();
 }
 
+
+/* ================= ITENS DA QUEBRA POR LOJA (Gestor) ================= */
+let plF = { tipo:"", secao:"", busca:"" }, plCache = null;
+const PL_COL = { "Rebaixa":"rebaixa", "Vencido com acompanhamento":"vencAcomp", "Vencido sem acompanhamento":"vencSem", "Avaria":"vencSem" };
+async function vPerdasLoja(lj){
+  const view = document.getElementById("view");
+  const mes = perdasMes || mesAtual();
+  if(!LOJAS[lj]){ view.innerHTML = '<div class="alertbox a-red">Loja inválida.</div>'; return; }
+  try{
+    const base = await carregarPerdasBase(mes);
+    let balanco = 0;
+    try{ const r = await sb.from("balancos").select("valor").eq("mes",mes).eq("loja",lj).maybeSingle(); balanco = Number(r.data && r.data.valor)||0; }catch(e){}
+    // uma linha por item × tipo de quebra
+    const g = {};
+    base.ress.filter(r=>r.loja===lj).forEach(r=>{
+      const tipo = tipoQuebra(r, base.descPorLote[r.lote_id]);
+      const k = r.ean+"|"+tipo;
+      const x = g[k] || (g[k] = { ean:r.ean, desc: base.descrPorEan[r.ean]||r.ean, secao: base.secaoPorEan[r.ean]||"(sem seção)",
+        forn: r.nome_fornecedor||"(sem nome)", tipo, col: PL_COL[tipo]||"vencSem", qtd:0, valor:0, dias:0, de:r.data, ate:r.data, pn:0, pv:0 });
+      x.qtd += Number(r.qtd_vendida)||0; x.valor += Number(r.valor)||0; x.dias++;
+      if(r.data<x.de) x.de=r.data; if(r.data>x.ate) x.ate=r.data;
+      x.pn = Math.max(x.pn, Number(r.preco_normal)||0); x.pv = Math.max(x.pv, Number(r.preco_vigente)||0);
+      if(r.nome_fornecedor) x.forn = r.nome_fornecedor;
+    });
+    const rows = Object.values(g).sort((a,b)=>b.valor-a.valor);
+    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipo:"", secao:"", busca:"" };
+    plCache = { lj, mes, rows, balanco };
+    view.innerHTML = `
+    <button class="btn-s" onclick="goBack()" style="margin-bottom:8px;">← Voltar ao índice de perdas</button>
+    <div id="plBox"></div>`;
+    plDesenhar();
+  }catch(e){ view.innerHTML = `<div class="alertbox a-red">${e.message||e}</div>`; }
+}
+function plSet(k,v){ plF[k]=v; plDesenhar(); }
+function plFiltrar(){
+  if(!plCache) return [];
+  const b = normNome(plF.busca||"");
+  return plCache.rows.filter(r => (!plF.tipo || r.col===plF.tipo) && (!plF.secao || r.secao===plF.secao)
+    && (!b || normNome(r.desc).includes(b) || String(r.ean).includes(b) || normNome(r.forn).includes(b)));
+}
+function plDesenhar(){
+  const box = document.getElementById("plBox"); if(!box || !plCache) return;
+  const { lj, mes, rows: todos, balanco } = plCache;
+  const rows = plFiltrar();
+  const soma = (lista, col) => lista.filter(r=>!col || r.col===col).reduce((a,r)=>a+r.valor,0);
+  const tR = soma(todos,"rebaixa"), tA = soma(todos,"vencAcomp"), tS = soma(todos,"vencSem"), ident = tR+tA+tS;
+  const totF = soma(rows);
+  const secoes = [...new Set(todos.map(r=>r.secao))].sort();
+  const chip = (txt, on, fn) => `<button class="chip ${on?'chip-on':''}" style="padding:5px 10px; font-size:12px;" onclick="${fn}">${txt}</button>`;
+  const badge = t => `<span class="badge" style="background:${COR_TIPO[t]||'#555'}; font-size:10px; white-space:nowrap;">${t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.")}</span>`;
+  const pct = v => ident>0 ? (v/ident*100).toFixed(1).replace(".",",")+"%" : "—";
+  box.innerHTML = `
+  <div class="card">
+    <h2>Itens da quebra — ${LOJAS[lj]} · ${mesLabel(mes)}</h2>
+    <p class="muted">Tudo que o Data Crítica identificou nesta loja no mês, item por item. Os totais batem com a linha da loja no índice de perdas.</p>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${brl(tR)}</div><div class="l">Rebaixa</div></div>
+      <div class="kpi red"><div class="v">${brl(tA)}</div><div class="l">Vencidas c/ acomp.</div></div>
+      <div class="kpi red"><div class="v">${brl(tS)}</div><div class="l">Vencidas s/ acomp. + avarias</div></div>
+      <div class="kpi"><div class="v">${brl(balanco)}</div><div class="l">Balanço (não identificadas)</div></div>
+    </div>
+    <div class="ress"><div><div class="l">Perda identificada ${brl(ident)} + balanço ${brl(balanco)}</div><div class="v">${brl(ident+balanco)}</div></div><div style="font-size:26px;">📉</div></div>
+  </div>
+  <div class="card">
+    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px;">
+      ${chip("Todos", !plF.tipo, "plSet('tipo','')")}
+      ${chip("Rebaixa", plF.tipo==="rebaixa", "plSet('tipo','rebaixa')")}
+      ${chip("Venc. c/ acomp.", plF.tipo==="vencAcomp", "plSet('tipo','vencAcomp')")}
+      ${chip("Venc. s/ acomp. + avarias", plF.tipo==="vencSem", "plSet('tipo','vencSem')")}
+    </div>
+    <div class="row">
+      <div><label>Seção</label><select onchange="plSet('secao',this.value)"><option value="">Todas</option>${secoes.map(x=>`<option ${plF.secao===x?'selected':''}>${x}</option>`).join("")}</select></div>
+      <div><label>Buscar (descrição, EAN ou fornecedor)</label><input value="${(plF.busca||'').replace(/"/g,'&quot;')}" oninput="plF.busca=this.value; plDesenharTabela()" placeholder="Ex: queijo"></div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+      <button class="btn-s" style="width:auto;" onclick="plCSV()">⬇️ CSV (Excel)</button>
+      <button class="btn-s" style="width:auto;" onclick="plPDF()">⬇️ PDF para a loja</button>
+    </div>
+  </div>
+  <div class="card" style="padding:8px;">
+    <div id="plTab"></div>
+  </div>`;
+  plDesenharTabela();
+}
+function plDesenharTabela(){
+  const el = document.getElementById("plTab"); if(!el || !plCache) return;
+  const rows = plFiltrar();
+  const tot = rows.reduce((a,r)=>a+r.valor,0), totQ = rows.reduce((a,r)=>a+r.qtd,0);
+  const identAll = plCache.rows.reduce((a,r)=>a+r.valor,0);
+  const badge = t => `<span class="badge" style="background:${COR_TIPO[t]||'#555'}; font-size:10px; white-space:nowrap;">${t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.")}</span>`;
+  el.innerHTML = rows.length ? `
+    <div style="max-height:70vh; overflow:auto;">
+    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead style="position:sticky; top:0; background:#fff; z-index:2;"><tr style="color:var(--mut); text-align:right;">
+        <th style="text-align:left; padding:6px;">Item</th><th style="text-align:left; padding:6px;">Tipo</th><th style="padding:6px;">Qtd</th><th style="padding:6px;">Valor</th><th style="padding:6px;">%</th></tr></thead>
+      <tbody>
+      ${rows.map((r,i)=>`<tr style="border-top:1px solid var(--line); ${i%2?'background:#F7F8FA;':''}">
+        <td style="padding:6px;"><div style="font-weight:600;">${r.desc}</div><div class="muted" style="font-size:11px;">${r.ean} · ${r.secao} · ${r.forn}${r.col==="rebaixa"&&r.pn?` · de ${brl(r.pn)} por ${brl(r.pv)}`:""} · ${r.dias} dia(s) ${r.de===r.ate?fmtData(r.de):fmtData(r.de)+"–"+fmtData(r.ate)}</div></td>
+        <td style="padding:6px;">${badge(r.tipo)}</td>
+        <td style="padding:6px; text-align:right;">${fdQtd(r.qtd)}</td>
+        <td style="padding:6px; text-align:right; font-weight:600;">${brl(r.valor)}</td>
+        <td style="padding:6px; text-align:right;" class="muted">${identAll>0?(r.valor/identAll*100).toFixed(1).replace(".",","):"—"}%</td></tr>`).join("")}
+      </tbody>
+      <tfoot><tr style="border-top:2px solid var(--line); font-weight:700;"><td style="padding:6px;">TOTAL (${rows.length} linha(s))</td><td></td><td style="text-align:right; padding:6px;">${fdQtd(totQ)}</td><td style="text-align:right; padding:6px;">${brl(tot)}</td><td style="text-align:right; padding:6px;">${identAll>0?(tot/identAll*100).toFixed(1).replace(".",","):"—"}%</td></tr></tfoot>
+    </table></div>` : `<p class="muted center">Nenhum lançamento neste filtro.</p>`;
+}
+function plCSV(){
+  const rows = plFiltrar(); if(!rows.length) return alert("Nada neste filtro.");
+  const q = v => '"'+String(v??"").replace(/"/g,'""')+'"';
+  const num = n => String(Math.round(n*100)/100).replace(".",",");
+  const linhas = [["Loja","Mês","EAN","Descrição","Seção","Fornecedor","Tipo","Qtd","Valor","Preço normal","Preço rebaixa","Dias","De","Até"].join(";")];
+  rows.forEach(r=>linhas.push([LOJAS[plCache.lj], plCache.mes, r.ean, r.desc, r.secao, r.forn, r.tipo, num(r.qtd), num(r.valor), r.col==="rebaixa"?num(r.pn):"", r.col==="rebaixa"?num(r.pv):"", r.dias, fmtData(r.de), fmtData(r.ate)].map(q).join(";")));
+  const blob = new Blob(["\ufeff"+linhas.join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `quebra_${plCache.lj}_${plCache.mes}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+}
+function plPDF(){
+  if(!window.jspdf) return alert("Biblioteca de PDF ainda carregando — tente de novo em 2 segundos.");
+  const rows = plFiltrar(); if(!rows.length) return alert("Nada neste filtro.");
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:"mm", format:"a4"});
+  const M = 10, W = 190, PH = 297, navy = [14,42,71];
+  const { lj, mes, balanco } = plCache;
+  const soma = col => plCache.rows.filter(r=>r.col===col).reduce((a,r)=>a+r.valor,0);
+  const tR = soma("rebaixa"), tA = soma("vencAcomp"), tS = soma("vencSem"), ident = tR+tA+tS;
+  const emitido = new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  const filtros = [plF.tipo?({rebaixa:"Rebaixa",vencAcomp:"Vencidas c/ acomp.",vencSem:"Vencidas s/ acomp. + avarias"})[plF.tipo]:"Todos os tipos", plF.secao||"Todas as seções", plF.busca?`busca "${plF.busca}"`:""].filter(Boolean).join("  ·  ");
+  let y = 0;
+  const cab = ()=>{
+    doc.setFillColor(...navy); doc.rect(0,0,210,22,"F");
+    doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+    doc.text(`Rende Mais · Itens da quebra — ${LOJAS[lj]} · ${mesLabel(mes)}`, M, 9);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5);
+    doc.text(filtros, M, 15); doc.text(`Emitido em ${emitido} por ${sess.nome}`, M, 19.5);
+    doc.setTextColor(0); y = 28;
+  };
+  const cols = [{t:"Item",w:96},{t:"Tipo",w:34},{t:"Qtd",w:16,r:1},{t:"Valor",w:26,r:1},{t:"Conferido",w:18}];
+  const desenhaCab = ()=>{ doc.setFillColor(232,236,242); doc.rect(M,y,W,6,"F"); doc.setFont("helvetica","bold"); doc.setFontSize(7.5);
+    let x=M; cols.forEach(c=>{ doc.text(c.t, c.r? x+c.w-1.5 : x+1.5, y+4, {align:c.r?"right":"left"}); x+=c.w; }); y+=6; };
+  cab();
+  doc.setFont("helvetica","bold"); doc.setFontSize(10);
+  doc.text(`Rebaixa ${brl(tR)}   ·   Vencidas c/ acomp. ${brl(tA)}   ·   Vencidas s/ acomp. + avarias ${brl(tS)}`, M, y); y += 5;
+  doc.text(`Identificada ${brl(ident)}   +   Balanço ${brl(balanco)}   =   Perda total ${brl(ident+balanco)}`, M, y); y += 7;
+  desenhaCab();
+  const tipoCurto = t => t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.");
+  rows.forEach((r,i)=>{
+    doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
+    const l1 = doc.splitTextToSize(r.desc, cols[0].w-3).slice(0,1);
+    const l2 = doc.splitTextToSize(`${r.ean} · ${r.secao} · ${r.forn}${r.col==="rebaixa"&&r.pn?` · de ${brl(r.pn)} por ${brl(r.pv)}`:""}`, cols[0].w-3).slice(0,1);
+    const h = 9;
+    if(y + h > PH-12){ doc.addPage(); cab(); desenhaCab(); doc.setFont("helvetica","normal"); doc.setFontSize(7.5); }
+    if(i%2){ doc.setFillColor(247,248,250); doc.rect(M,y,W,h,"F"); }
+    let x = M;
+    doc.setFont("helvetica","bold"); doc.text(l1, x+1.5, y+3.4); doc.setFont("helvetica","normal"); doc.setTextColor(90); doc.setFontSize(6.5); doc.text(l2, x+1.5, y+7); doc.setTextColor(0); doc.setFontSize(7.5); x += cols[0].w;
+    doc.text(tipoCurto(r.tipo), x+1.5, y+5.5); x += cols[1].w;
+    doc.text(fdQtd(r.qtd), x+cols[2].w-1.5, y+5.5, {align:"right"}); x += cols[2].w;
+    doc.text(brl(r.valor), x+cols[3].w-1.5, y+5.5, {align:"right"}); x += cols[3].w;
+    doc.setDrawColor(150); doc.rect(x+5, y+2, 5, 5); // caixinha para marcar na conferência
+    y += h;
+  });
+  const tot = rows.reduce((a,r)=>a+r.valor,0);
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); y += 3;
+  if(y > PH-14){ doc.addPage(); cab(); }
+  doc.text(`Total das ${rows.length} linha(s): ${brl(tot)}`, M+W, y, {align:"right"});
+  doc.save(`quebra_${lj}_${mes}.pdf`);
+}
+
 /* ================= CADASTRO ================= */
 async function vCadastro(){
   const {data:prods} = await sb.from("produtos").select("*").order("descricao").limit(500);
@@ -3405,6 +3609,27 @@ async function vCadastro(){
   return `<div class="card">
     <h2>Como o acompanhamento funciona</h2>
     <p class="muted" style="line-height:1.5;">Todo produto cadastrado no VR Controller (com EAN) já está disponível no app. Basta o operador escanear na aba <b>📷 Contagem</b> — o app reconhece o item pelo catálogo e cria o acompanhamento sozinho.<br><br>Preço, custo, estoque e vendas chegam pela sincronização diária às 5h. Quando um lote zera a contagem ou vence, o app volta a usar o estoque do VR para aquele item.</p>
+  </div>
+  <div class="card">
+    <h2>Novo usuário interno</h2>
+    <p class="muted">Cadastre operadores, prevenção, gerentes e diretores. O usuário entra pela tela de login com o nome e o PIN que você definir aqui.</p>
+    <label>Nome</label><input id="niNome" placeholder="Ex: Fulano — Gerente Veneza">
+    <div class="row">
+      <div><label>Função</label>
+        <select id="niPapel">
+          <option value="operador">Operador</option>
+          <option value="prevencao">Prevenção</option>
+          <option value="gestor">Gestor (gerente / diretor)</option>
+        </select></div>
+      <div><label>Loja</label>
+        <select id="niLoja">
+          ${Object.entries(LOJAS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}
+        </select>
+        <div class="muted" style="font-size:12px; margin-top:4px;">Gestor enxerga todas as lojas; a loja aqui é só a de referência.</div>
+      </div>
+    </div>
+    <label>PIN (6 dígitos)</label><input id="niPin" inputmode="numeric" maxlength="6" type="password" placeholder="000000">
+    <button class="btn-p" onclick="criarUsuarioInterno()">Criar usuário</button>
   </div>
   <div class="card">
     <h2>Acesso de fornecedor</h2>
