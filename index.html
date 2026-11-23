@@ -3433,7 +3433,7 @@ async function marcarEnviado(){
 
 
 /* ================= ITENS DA QUEBRA POR LOJA (Gestor) ================= */
-let plF = { tipos:[], secao:"", busca:"" }, plCache = null;
+let plF = { tipos:[], secao:"", busca:"", zeros:false }, plCache = null;
 const PL_COL = { "Rebaixa":"rebaixa", "Vencido com acompanhamento":"vencAcomp", "Vencido sem acompanhamento":"vencSem", "Avaria":"vencSem" };
 async function vPerdasLoja(lj){
   const view = document.getElementById("view");
@@ -3456,7 +3456,7 @@ async function vPerdasLoja(lj){
       if(r.nome_fornecedor) x.forn = r.nome_fornecedor;
     });
     const rows = Object.values(g).sort((a,b)=>b.valor-a.valor);
-    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipos:[], secao:"", busca:"" };
+    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipos:[], secao:"", busca:"", zeros:false };
     plCache = { lj, mes, rows, balanco };
     view.innerHTML = `
     <button class="btn-s" onclick="goBack()" style="margin-bottom:8px;">← Voltar ao índice de perdas</button>
@@ -3469,7 +3469,7 @@ function plTipo(t){ if(!t){ plF.tipos=[]; } else { const i=plF.tipos.indexOf(t);
 function plFiltrar(){
   if(!plCache) return [];
   const b = normNome(plF.busca||"");
-  return plCache.rows.filter(r => (!plF.tipos.length || plF.tipos.includes(r.tipo)) && (!plF.secao || r.secao===plF.secao)
+  return plCache.rows.filter(r => (plF.zeros || Math.abs(r.valor) >= 0.005) && (!plF.tipos.length || plF.tipos.includes(r.tipo)) && (!plF.secao || r.secao===plF.secao)
     && (!b || normNome(r.desc).includes(b) || String(r.ean).includes(b) || normNome(r.forn).includes(b)));
 }
 function plDesenhar(){
@@ -3505,6 +3505,7 @@ function plDesenhar(){
       <div><label>Seção</label><select onchange="plSet('secao',this.value)"><option value="">Todas</option>${secoes.map(x=>`<option ${plF.secao===x?'selected':''}>${x}</option>`).join("")}</select></div>
       <div><label>Buscar (descrição, EAN ou fornecedor)</label><input value="${(plF.busca||'').replace(/"/g,'&quot;')}" oninput="plF.busca=this.value; plDesenharTabela()" placeholder="Ex: queijo"></div>
     </div>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:400; margin:8px 0 0; cursor:pointer;"><input type="checkbox" style="width:18px; height:18px; margin:0;" ${plF.zeros?'checked':''} onchange="plSet('zeros',this.checked)"> Mostrar também itens sem verba (vendidos no preço cheio, R$ 0,00) — ${plCache.rows.filter(r=>Math.abs(r.valor)<0.005).length} item(ns)</label>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
       <button class="btn-s" style="width:auto;" onclick="plCSV()">⬇️ CSV (Excel)</button>
       <button class="btn-s" style="width:auto;" onclick="plPDF()">⬇️ PDF para a loja</button>
