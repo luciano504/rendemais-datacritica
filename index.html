@@ -3433,7 +3433,7 @@ async function marcarEnviado(){
 
 
 /* ================= ITENS DA QUEBRA POR LOJA (Gestor) ================= */
-let plF = { tipos:[], secao:"", busca:"", zeros:false }, plCache = null;
+let plF = { tipos:[], secao:"", busca:"", zeros:false, semVal:false }, plCache = null;
 const PL_COL = { "Rebaixa":"rebaixa", "Vencido com acompanhamento":"vencAcomp", "Vencido sem acompanhamento":"vencSem", "Avaria":"vencSem" };
 async function vPerdasLoja(lj){
   const view = document.getElementById("view");
@@ -3447,8 +3447,8 @@ async function vPerdasLoja(lj){
     const g = {};
     base.ress.filter(r=>r.loja===lj).forEach(r=>{
       const tipo = tipoQuebra(r, base.descPorLote[r.lote_id]);
-      const k = r.ean+"|"+tipo;
-      const x = g[k] || (g[k] = { ean:r.ean, desc: base.descrPorEan[r.ean]||r.ean, secao: base.secaoPorEan[r.ean]||"(sem seção)",
+      const k = r.ean+"|"+tipo+(Number(r.preco_vigente)>0 ? "" : "|"+r.lote_id);
+      const x = g[k] || (g[k] = { lote_id: Number(r.preco_vigente)>0 ? null : r.lote_id, semVal: Number(r.preco_vigente)<=0 && !base.descPorLote[r.lote_id], ean:r.ean, desc: base.descrPorEan[r.ean]||r.ean, secao: base.secaoPorEan[r.ean]||"(sem seção)",
         forn: r.nome_fornecedor||"(sem nome)", tipo, col: PL_COL[tipo]||"vencSem", qtd:0, valor:0, dias:0, de:r.data, ate:r.data, pn:0, pv:0 });
       x.qtd += Number(r.qtd_vendida)||0; x.valor += Number(r.valor)||0; x.dias++;
       if(r.data<x.de) x.de=r.data; if(r.data>x.ate) x.ate=r.data;
@@ -3456,7 +3456,7 @@ async function vPerdasLoja(lj){
       if(r.nome_fornecedor) x.forn = r.nome_fornecedor;
     });
     const rows = Object.values(g).sort((a,b)=>b.valor-a.valor);
-    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipos:[], secao:"", busca:"", zeros:false };
+    if(!plCache || plCache.lj!==lj || plCache.mes!==mes) plF = { tipos:[], secao:"", busca:"", zeros:false, semVal:false };
     plCache = { lj, mes, rows, balanco };
     view.innerHTML = `
     <button class="btn-s" onclick="goBack()" style="margin-bottom:8px;">← Voltar ao índice de perdas</button>
@@ -3469,7 +3469,7 @@ function plTipo(t){ if(!t){ plF.tipos=[]; } else { const i=plF.tipos.indexOf(t);
 function plFiltrar(){
   if(!plCache) return [];
   const b = normNome(plF.busca||"");
-  return plCache.rows.filter(r => (plF.zeros || Math.abs(r.valor) >= 0.005) && (!plF.tipos.length || plF.tipos.includes(r.tipo)) && (!plF.secao || r.secao===plF.secao)
+  return plCache.rows.filter(r => (plF.zeros || Math.abs(r.valor) >= 0.005) && (!plF.semVal || r.semVal) && (!plF.tipos.length || plF.tipos.includes(r.tipo)) && (!plF.secao || r.secao===plF.secao)
     && (!b || normNome(r.desc).includes(b) || String(r.ean).includes(b) || normNome(r.forn).includes(b)));
 }
 function plDesenhar(){
@@ -3505,6 +3505,7 @@ function plDesenhar(){
       <div><label>Seção</label><select onchange="plSet('secao',this.value)"><option value="">Todas</option>${secoes.map(x=>`<option ${plF.secao===x?'selected':''}>${x}</option>`).join("")}</select></div>
       <div><label>Buscar (descrição, EAN ou fornecedor)</label><input value="${(plF.busca||'').replace(/"/g,'&quot;')}" oninput="plF.busca=this.value; plDesenharTabela()" placeholder="Ex: queijo"></div>
     </div>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:600; margin:8px 0 0; cursor:pointer; color:#B71C1C;"><input type="checkbox" style="width:18px; height:18px; margin:0;" ${plF.semVal?'checked':''} onchange="plSet('semVal',this.checked)"> Só vencidas SEM validação da Prevenção (sem foto / sem contagem do descarte) — ${plCache.rows.filter(r=>r.semVal&&Math.abs(r.valor)>=0.005).length} item(ns), ${brl(plCache.rows.filter(r=>r.semVal).reduce((a,r)=>a+r.valor,0))}</label>
     <label style="display:flex; gap:8px; align-items:center; font-weight:400; margin:8px 0 0; cursor:pointer;"><input type="checkbox" style="width:18px; height:18px; margin:0;" ${plF.zeros?'checked':''} onchange="plSet('zeros',this.checked)"> Mostrar também itens sem verba (vendidos no preço cheio, R$ 0,00) — ${plCache.rows.filter(r=>Math.abs(r.valor)<0.005).length} item(ns)</label>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
       <button class="btn-s" style="width:auto;" onclick="plCSV()">⬇️ CSV (Excel)</button>
@@ -3530,20 +3531,62 @@ function plDesenharTabela(){
       <tbody>
       ${rows.map((r,i)=>`<tr style="border-top:1px solid var(--line); ${i%2?'background:#F7F8FA;':''}">
         <td style="padding:6px;"><div style="font-weight:600;">${r.desc}</div><div class="muted" style="font-size:11px;">${r.ean} · ${r.secao} · ${r.forn}${r.col==="rebaixa"&&r.pn?` · de ${brl(r.pn)} por ${brl(r.pv)}`:""} · ${r.dias} dia(s) ${r.de===r.ate?fmtData(r.de):fmtData(r.de)+"–"+fmtData(r.ate)}</div></td>
-        <td style="padding:6px;">${badge(r.tipo)}</td>
+        <td style="padding:6px;">${badge(r.tipo)}${r.semVal?'<br><span class="badge" style="background:#B71C1C; font-size:9px; margin-top:3px;">SEM VALIDAÇÃO</span>':''}</td>
         <td style="padding:6px; text-align:right;">${fdQtd(r.qtd)}</td>
-        <td style="padding:6px; text-align:right; font-weight:600;">${brl(r.valor)}</td>
+        <td style="padding:6px; text-align:right; font-weight:600;">${brl(r.valor)}${r.lote_id?`<br><button class="btn-sm" style="margin:3px 0 0; padding:2px 6px; font-size:10px; width:auto;" onclick="plCorrigir(${plCache.rows.indexOf(r)})">✏️ Corrigir qtd</button>`:""}</td>
         <td style="padding:6px; text-align:right;" class="muted">${identAll>0?(r.valor/identAll*100).toFixed(1).replace(".",","):"—"}%</td></tr>`).join("")}
       </tbody>
       <tfoot><tr style="border-top:2px solid var(--line); font-weight:700;"><td style="padding:6px;">TOTAL (${rows.length} linha(s))</td><td></td><td style="text-align:right; padding:6px;">${fdQtd(totQ)}</td><td style="text-align:right; padding:6px;">${brl(tot)}</td><td style="text-align:right; padding:6px;">${identAll>0?(tot/identAll*100).toFixed(1).replace(".",","):"—"}%</td></tr></tfoot>
     </table></div>` : `<p class="muted center">Nenhum lançamento neste filtro.</p>`;
 }
+
+/* Correção de quantidade de quebra já lançada (vencida / avaria). Rebaixa vem das vendas do VR e não se corrige aqui. */
+async function plCorrigir(i){
+  const r = plCache && plCache.rows[i];
+  if(!r || !r.lote_id) return;
+  const txt = prompt(`Corrigir quantidade da quebra\n\n${r.desc}\n${r.tipo} · ${LOJAS[plCache.lj]}\nQuantidade lançada: ${fdQtd(r.qtd)} · Valor: ${brl(r.valor)}\n\nQuantidade CORRETA (use vírgula para kg; 0 = não houve perda):`, String(r.qtd).replace(".",","));
+  if(txt===null) return;
+  const q = parseFloat(String(txt).replace(",","."));
+  if(!(q>=0)) return alert("Quantidade inválida.");
+  if(Math.abs(q - r.qtd) < 0.0005) return alert("Nada mudou.");
+  const motivo = (prompt("Motivo da correção (obrigatório):")||"").trim();
+  if(motivo.length < 5) return alert("Informe o motivo (mínimo 5 caracteres).");
+  const senha = prompt("Senha de confirmação:");
+  if(senha===null) return;
+  if(await sha256(senha.trim()) !== SENHA_NOVO_USUARIO_HASH) return alert("Senha de confirmação incorreta.");
+  loading(true);
+  try{
+    const {data:ress, error:e1} = await sb.from("ressarcimento_diario").select("*").eq("lote_id", r.lote_id).eq("preco_vigente", 0).order("data");
+    if(e1) throw e1;
+    if(!ress || !ress.length) throw new Error("Lançamento não encontrado no banco — atualize a tela e tente de novo.");
+    const custo = Number(ress[0].preco_normal)||0;
+    const novoValor = Math.round(q*custo*100)/100;
+    if(!confirm(`Confirmar correção?\n\n${r.desc}\nQuantidade: ${fdQtd(r.qtd)} → ${fdQtd(q)}\nValor: ${brl(r.valor)} → ${brl(novoValor)} (custo ${brl(custo)})\nMotivo: ${motivo}`)){ loading(false); return; }
+    const {data:lt} = await sb.from("lotes").select("validade").eq("id", r.lote_id).maybeSingle();
+    const val = lt ? String(lt.validade).slice(0,10) : null;
+    await sb.from("correcoes_lote").insert({
+      lote_id: r.lote_id, ean: r.ean, loja: plCache.lj,
+      qtd_antiga: r.qtd, qtd_nova: q, validade_antiga: val, validade_nova: val,
+      motivo: "[quebra] " + motivo, corrigido_por: sess.nome
+    });
+    for(let k=0;k<ress.length;k++){
+      const {error} = await sb.from("ressarcimento_diario").update(k===0 ? { qtd_vendida:q, valor:novoValor } : { qtd_vendida:0, valor:0 }).eq("id", ress[k].id);
+      if(error) throw error;
+    }
+    await sb.from("descartes").update({ qtd_validada: q }).eq("lote_id", r.lote_id);
+    if(q > 0) await sb.from("lotes").update({ qtd_inicial: q }).eq("id", r.lote_id).eq("resolvido", true);
+    perdasBase = null; dadosSujos = true;
+    alert("Quebra corrigida e registrada para auditoria.");
+    loading(false);
+    await vPerdasLoja(plCache.lj);
+  }catch(e){ loading(false); erroDB(e); }
+}
 function plCSV(){
   const rows = plFiltrar(); if(!rows.length) return alert("Nada neste filtro.");
   const q = v => '"'+String(v??"").replace(/"/g,'""')+'"';
   const num = n => String(Math.round(n*100)/100).replace(".",",");
-  const linhas = [["Loja","Mês","EAN","Descrição","Seção","Fornecedor","Tipo","Qtd","Valor","Preço normal","Preço rebaixa","Dias","De","Até"].join(";")];
-  rows.forEach(r=>linhas.push([LOJAS[plCache.lj], plCache.mes, r.ean, r.desc, r.secao, r.forn, r.tipo, num(r.qtd), num(r.valor), r.col==="rebaixa"?num(r.pn):"", r.col==="rebaixa"?num(r.pv):"", r.dias, fmtData(r.de), fmtData(r.ate)].map(q).join(";")));
+  const linhas = [["Loja","Mês","EAN","Descrição","Seção","Fornecedor","Tipo","Validado pela Prevenção","Qtd","Valor","Preço normal","Preço rebaixa","Dias","De","Até"].join(";")];
+  rows.forEach(r=>linhas.push([LOJAS[plCache.lj], plCache.mes, r.ean, r.desc, r.secao, r.forn, r.tipo, r.col==="rebaixa"?"":(r.semVal?"NÃO":"sim"), num(r.qtd), num(r.valor), r.col==="rebaixa"?num(r.pn):"", r.col==="rebaixa"?num(r.pv):"", r.dias, fmtData(r.de), fmtData(r.ate)].map(q).join(";")));
   const blob = new Blob(["\ufeff"+linhas.join("\r\n")], {type:"text/csv;charset=utf-8"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `quebra_${plCache.lj}_${plCache.mes}.csv`; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
@@ -3558,7 +3601,7 @@ function plPDF(){
   const soma = col => plCache.rows.filter(r=>r.col===col).reduce((a,r)=>a+r.valor,0);
   const tR = soma("rebaixa"), tA = soma("vencAcomp"), tS = soma("vencSem"), ident = tR+tA+tS;
   const emitido = new Date().toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
-  const filtros = [plF.tipos.length? plF.tipos.map(t=>t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.")).join(" + ") : "Todos os tipos", plF.secao||"Todas as seções", plF.busca?`busca "${plF.busca}"`:""].filter(Boolean).join("  ·  ");
+  const filtros = [plF.tipos.length? plF.tipos.map(t=>t.replace("Vencido com acompanhamento","Venc. c/ acomp.").replace("Vencido sem acompanhamento","Venc. s/ acomp.")).join(" + ") : "Todos os tipos", plF.secao||"Todas as seções", plF.busca?`busca "${plF.busca}"`:"", plF.semVal?"só sem validação":""].filter(Boolean).join("  ·  ");
   let y = 0;
   const cab = ()=>{
     doc.setFillColor(...navy); doc.rect(0,0,210,22,"F");
@@ -3586,7 +3629,7 @@ function plPDF(){
     if(i%2){ doc.setFillColor(247,248,250); doc.rect(M,y,W,h,"F"); }
     let x = M;
     doc.setFont("helvetica","bold"); doc.text(l1, x+1.5, y+3.4); doc.setFont("helvetica","normal"); doc.setTextColor(90); doc.setFontSize(6.5); doc.text(l2, x+1.5, y+7); doc.setTextColor(0); doc.setFontSize(7.5); x += cols[0].w;
-    doc.text(tipoCurto(r.tipo), x+1.5, y+5.5); x += cols[1].w;
+    doc.text(tipoCurto(r.tipo), x+1.5, y+(r.semVal?4:5.5)); if(r.semVal){ doc.setTextColor(183,28,28); doc.setFontSize(6); doc.setFont("helvetica","bold"); doc.text("SEM VALIDAÇÃO", x+1.5, y+7.6); doc.setTextColor(0); doc.setFontSize(7.5); doc.setFont("helvetica","normal"); } x += cols[1].w;
     doc.text(fdQtd(r.qtd), x+cols[2].w-1.5, y+5.5, {align:"right"}); x += cols[2].w;
     doc.text(brl(r.valor), x+cols[3].w-1.5, y+5.5, {align:"right"}); x += cols[3].w;
     doc.setDrawColor(150); doc.rect(x+5, y+2, 5, 5); // caixinha para marcar na conferência
