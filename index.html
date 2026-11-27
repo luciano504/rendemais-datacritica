@@ -2643,10 +2643,10 @@ async function vFornHome(){
     let sugHtml = "";
     if(sug){
       if(sug.status==="pendente") sugHtml = `<div class="s" style="color:#1565C0;">💡 Você sugeriu ${brl(sug.preco)} — aguardando o gestor</div>`;
-      else if(sug.status==="aceita") sugHtml = `<div class="s" style="color:var(--ok);">✓ Sugestão de ${brl(sug.preco)} aceita</div>`;
+      else if(sug.status==="aceita") sugHtml = `<div class="s" style="color:var(--ok);">✓ Sugestão de ${brl(sug.preco)} aceita — pode sugerir nova rebaixa se precisar</div>`;
       else if(sug.status==="recusada") sugHtml = `<div class="s" style="color:var(--danger);">✗ Sugestão de ${brl(sug.preco)} recusada — pode sugerir outro valor</div>`;
     }
-    const podeSugerir = !sug || sug.status==="recusada";
+    const podeSugerir = !sug || sug.status!=="pendente";   // só bloqueia enquanto houver sugestão aguardando o gestor
     return `<div class="item" style="flex-wrap:wrap;">
       <div style="flex:1; min-width:200px;"><div class="t">${badgeLoja(l.loja)}${l.produtos?l.produtos.descricao:l.ean}</div>
       <div class="s">${LOJAS[l.loja]} · ${Number(l.qtd_restante)} un · vence ${fmtData(l.validade)}${promo?` · de ${brl(pn)} por <b>${brl(l.preco_atual)}</b>`:` · preço ${brl(l.preco_atual||pn||0)}`}</div>
